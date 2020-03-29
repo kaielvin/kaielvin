@@ -2,10 +2,15 @@
     <head>
         <!-- <link rel="stylesheet" href="index.css"> -->
         <style>
-a
+a, .link
 {
   color: blue;
   text-decoration: none;
+  cursor: pointer;
+}
+a:hover, .link:hover
+{
+  text-decoration: underline;
 }
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" type="text/javascript"></script>
@@ -141,7 +146,7 @@ class Node
 
   executeJsMethod(type)
   {
-    var jsMethod = type.getFromType_to(makeNode('resolve'));
+    var jsMethod = type.getFromType_to(makeNode('claimType.resolve'));
     if(!(jsMethod instanceof Object)) return undefined;
     if(!jsMethod.j) return undefined;
     return jsMethod.j(this);
@@ -154,12 +159,14 @@ class Node
 }
 
 var _nodeNameIndex = {};
-var _title = _nodeNameIndex["title"] = new Node();
-_title.setFromType(_title,{s:"title"});
+var _title = _nodeNameIndex["object.title"] = new Node();
+_title.setFromType(_title,{s:"object.title"});
 function makeNode(name)
 {
   if(name instanceof Node) return name;
   var node = _nodeNameIndex[name];
+  if(node) return node;
+  node = _idToNodeIndex[name];
   if(node) return node;
   node = new Node();
   node.setFromType(_title,{s:name});
@@ -167,18 +174,18 @@ function makeNode(name)
 }
 var _object = makeNode("object");
 var _anything = makeNode("anything");
-var _instanceOf = makeNode("instanceOf");
+var _instanceOf = makeNode("object.instanceOf");
 var _instanciable = makeNode("instanciable");
 var _claimType = makeNode("claimType");
 // var _typeFromOne = makeNode("typeFromOne");
-var _typeFrom = makeNode("typeFrom");
-var _typeTo = makeNode("typeTo");
-var _multipleValues = makeNode("multipleValues");
+var _typeFrom = makeNode("claimType.typeFrom");
+var _typeTo = makeNode("claimType.typeTo");
+// var _multipleValues = makeNode("multipleValues");
 var _jsMethod = makeNode("jsMethod");
-var _descriptorTo_from = makeNode("descriptorTo_from");
-var _descriptorTo_type = makeNode("descriptorTo_type");
-var _descriptorFrom_to   = makeNode("descriptorFrom_to");
-var _descriptorFrom_type = makeNode("descriptorFrom_type");
+// var _descriptorTo_from = makeNode("descriptorTo_from");
+// var _descriptorTo_type = makeNode("descriptorTo_type");
+// var _descriptorFrom_to   = makeNode("descriptorFrom_to");
+// var _descriptorFrom_type = makeNode("descriptorFrom_type");
 
 
 /*
@@ -203,6 +210,15 @@ function $$(i1,i2,i3,i4)
   if(!i1) return new Node();
 
 
+  /*
+  "c a.b" implies:
+    "a > a.b > c"
+  */
+  var matchClaimType = _.isString(i1) && i1.match(/([^\ >]+)\ ([^\.>]+)\.([^.>]+)/);
+  // if(matchClaimType)
+  //   console.log("$$ OVERRIDE",matchClaimType[2]+' > '+matchClaimType[2]+'.'+matchClaimType[3]+' > '+matchClaimType[1]);
+  if(matchClaimType)
+    return $$(matchClaimType[2]+' > '+matchClaimType[2]+'.'+matchClaimType[3]+' > '+matchClaimType[1],i2,i3,i4);
 
   /*
   "a > b > c" implies:
@@ -237,14 +253,15 @@ function $$(i1,i2,i3,i4)
     if(typeFrom != _object)
       typeFrom.setFromType(_instanceOf,_instanciable);
     // claimType.setFromType(singleFrom ? _typeFromOne : _typeFrom,typeFrom);
+    claimType.setFromType(_typeFrom,typeFrom);
     claimType.setFromType(_typeTo,  type__To);
     if(multipleValues)
-      claimType.setFromType(_multipleValues,{b:true});
+      claimType.setFromType($$('claimType.multipleValues'),{b:true});
 
     if(i2 && _.isFunction(i2))
     {
-      $$(claimType,makeNode('functional'),makeNode('true'));
-      $$(claimType,makeNode('resolve'),i2);
+      $$(claimType,'claimType.functional','true');
+      $$(claimType,'claimType.resolve',i2);
     }
 
     return claimType;
@@ -291,8 +308,10 @@ function $$(i1,i2,i3,i4)
   {
     var typeObject = makeNode(i2);
     // if(typeObject.getFromType_node(_typeTo) == _jsMethod)
-    if(typeObject.getFromType_node(makeNode('functional')) == makeNode('true'))
+    if(typeObject.getFromType_node(makeNode('claimType.functional')) == makeNode('true'))
       return fromObject.executeJsMethod(typeObject);
+    else
+      return fromObject.getFromType_node(typeObject);
   }
 
   return fromObject;
@@ -310,8 +329,8 @@ $$('boolean (instanciable)');
 $$('true (boolean)');
 $$('false (boolean)');
 
-$$('object > title > string');
-$$('object > instanceOf > instanciable');
+$$('string object.title');
+$$('instanciable object.instanceOf');
 
 $$('primitive (instanciable)');
 $$('string (primitive)');
@@ -319,16 +338,16 @@ $$('number (primitive)');
 $$('jsMethod (primitive)');
 
 // $$('claimType > typeFromOne > object');
-$$('claimType > typeFrom > instanciable');
-$$('claimType > typeTo > anything');
-$$('claimType > multipleValues > boolean');
-$$('claimType > functional > boolean');
-$$('claimType > resolve > jsMethod');
+$$('instanciable claimType.typeFrom');
+$$('anything     claimType.typeTo');
+$$('boolean      claimType.multipleValues');
+$$('boolean      claimType.functional');
+$$('jsMethod     claimType.resolve');
 
-$$('object > link > string',o=>'<a href="#'+o.name+'">'+o.name+'</a>');
-$$('object > simpleView > string',o=>
+$$('string object.link',o=>'<a href="#'+o.name+'">'+o.name+'</a>');
+$$('string object.simpleView',o=>
 {
-  console.log("simpleView()","id",o.id);
+  console.log("object.simpleView()","id",o.id);
 
   var title = o.name;
   // var instanciable = o.getFromType_node(_instanceOf) || _object;
@@ -337,31 +356,23 @@ $$('object > simpleView > string',o=>
   var fromTypesValues = fromTypes.map(type=>
   {
     var value = o.getFromType_to(type);
-    var valueHtml = value instanceof Node ? $$(value,'link')
+    var valueHtml = value instanceof Node ? $$(value,'object.link')
       : value.s ? '"'+value.s+'"'
       : value.j ? '*function*'
       // : value.b != undefined ? (value.b?'true':'false')
       : value; // should be number
 
-    return '<li>'+$$(type,'link')+' > '+valueHtml+'</li>'
+    return '<li>'+$$(type,'object.link')+' > '+valueHtml+'</li>'
   });
 
   var toTypes = o.getTo_types();
   var toTypesValues = toTypes.map(type=>
   {
     var descriptor = $$();
-    $$(descriptor,_instanceOf,"descriptorFrom_to");
-    $$(descriptor,_descriptorFrom_to,o);
-    $$(descriptor,_descriptorFrom_type,type);
-
-    return $$(descriptor,'descriptorFrom_htmlList');
-
-    // return '<li>'
-    //   +$$(type,'link')
-    //   +' < '
-    //   +o.getToType_froms(type).map(o=>$$(o,'link')).join(', ')
-    //   // +' <span class="link" onclick=""></span>'
-    //   +'</li>'
+    $$(descriptor,_instanceOf,"descriptorFrom");
+    $$(descriptor,'descriptorFrom.to',o);
+    $$(descriptor,'descriptorFrom.type',type);
+    return $$(descriptor,'descriptorFrom.htmlList');
   });
 
   return htmlToElement('<div>'
@@ -372,41 +383,50 @@ $$('object > simpleView > string',o=>
     +'</div>');
 });
 
-$$('descriptorTo > descriptorTo_from > object');
-$$('descriptorTo > descriptorTo_type > claimType');
-$$('descriptorTo > descriptorTo_resolve > object',o=>
-{
-  var type = o.getFromType_node(_descriptorTo_type);
-  if(!type) return undefined;
-  var from = o.getFromType_node(_descriptorTo_from);
-  if(!from) return undefined;
-  return from.getFromType_node(type);
-});
 
-$$('descriptorFrom > descriptorTo_to > object');
-$$('descriptorFrom > descriptorTo_type > claimType');
-$$('descriptorFrom > descriptorFrom_resolve > object*',o=>
+$$('object    descriptorTo.from');
+$$('claimType descriptorTo.type');
+// $$('object    descriptorTo.resolve',o=>
+// {
+//   var type = o.getFromType_node(_descriptorTo_type);
+//   if(!type) return undefined;
+//   var from = o.getFromType_node(_descriptorTo_from);
+//   if(!from) return undefined;
+//   return from.getFromType_node(type);
+// });
+
+$$('object    descriptorFrom.to');
+$$('claimType descriptorFrom.type');
+$$('object*   descriptorFrom.resolve',o=>
 {
-  var type = o.getFromType_node(_descriptorFrom_type);
-  if(!type) return undefined;
-  var to = o.getFromType_node(_descriptorFrom_to);
-  if(!to) return undefined;
+  var type = $$(o,'descriptorFrom.type');
+  if(!type) return [];
+  var to = $$(o,'descriptorFrom.to');
+  if(!to) return [];
   return to.getToType_froms(type);
 });
-$$('descriptorFrom > descriptorFrom_htmlList > string',o=>
+$$('string    descriptorFrom.htmlList',o=>
 {
-  var type = o.getFromType_node(_descriptorFrom_type);
-  var froms = $$(o,'descriptorFrom_resolve');
-  console.log("descriptorFrom, descriptorFrom_htmlList",o.name);
-  console.log("descriptorFrom, descriptorFrom_htmlList",froms.map(from=>from.name).join(', '));
+  var type = $$(o,'descriptorFrom.type');
+  var froms = $$(o,'descriptorFrom.resolve');
+  var truncated = froms.length > 12;
+  if(truncated) froms = _.slice(froms,0,12);
 
   return '<li>'
-    +$$(type,'link')
+    +$$(type,'object.link')
     +' < '
-    +froms.map(o=>$$(o,'link')).join(', ')
-    // +' <span class="link" onclick=""></span>'
+    +froms.map(o=>$$(o,'object.link')).join(', ')
+    +(truncated ? ', (…)' : '')
+    +' <span class="link" onclick="$$(\''+o.id+'\',\'descriptorFrom.onSelect\')">[select]</span>'
     +'</li>'
-})
+});
+// $$('descriptorFrom > descriptorFrom_onSelect > undefined',o=>
+$$('undefined descriptorFrom.onSelect',o=>
+{
+  var type = $$(o,'descriptorFrom.type');
+  var froms = $$(o,'descriptorFrom.resolve');
+  console.log("descriptorFrom.onSelect()","o.id",o.id,"froms",froms.map(o=>o.name).join(', '));
+});
 
 
 
@@ -422,7 +442,7 @@ var showObject = ()=>
   var name = location.hash && location.hash.substring(1) || "instanciable";
   console.log("LOAD",name);
   content.innerHTML = '';
-  content.appendChild(($$(name,'simpleView')));
+  content.appendChild(($$(name,'object.simpleView')));
 }
 
 window.addEventListener("hashchange", showObject);
