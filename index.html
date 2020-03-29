@@ -12,6 +12,10 @@ a:hover, .link:hover
 {
   text-decoration: underline;
 }
+#selectedDescriptor
+{
+  margin-top: 3em;
+}
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" type="text/javascript"></script>
     </head>
@@ -19,6 +23,7 @@ a:hover, .link:hover
 
 <div id="app">
     <div id="content"></div>
+    <div id="selectedDescriptor"></div>
 </div>
 
 <script>
@@ -375,12 +380,12 @@ $$('string object.simpleView',o=>
     return $$(descriptor,'descriptorFrom.htmlList');
   });
 
-  return htmlToElement('<div>'
+  return '<div>'
       +'<h1>'+title+'</h1>'
       // +'<strong>'+instanciable.name+'</strong>'
       +'<ul>'+fromTypesValues.join('')+'</ul>'
       +'<ul>'+toTypesValues.join('')+'</ul>'
-    +'</div>');
+    +'</div>';
 });
 
 
@@ -417,15 +422,17 @@ $$('string    descriptorFrom.htmlList',o=>
     +' < '
     +froms.map(o=>$$(o,'object.link')).join(', ')
     +(truncated ? ', (…)' : '')
-    +' <span class="link" onclick="$$(\''+o.id+'\',\'descriptorFrom.onSelect\')">[select]</span>'
+    +' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
     +'</li>'
 });
-// $$('descriptorFrom > descriptorFrom_onSelect > undefined',o=>
-$$('undefined descriptorFrom.onSelect',o=>
+$$('string descriptorFrom.htmlSmallDescription',o=>
 {
+  var to   = $$(o,'descriptorFrom.to');
   var type = $$(o,'descriptorFrom.type');
-  var froms = $$(o,'descriptorFrom.resolve');
-  console.log("descriptorFrom.onSelect()","o.id",o.id,"froms",froms.map(o=>o.name).join(', '));
+  // var froms = $$(o,'descriptorFrom.resolve');
+  // console.log("descriptorFrom.onSelect()","o.id",o.id,"froms",froms.map(o=>o.name).join(', '));
+  console.log("descriptorFrom.htmlSmallDescription()","descriptor",o,$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link'));
+  return '<span>Selected: '+$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link')+'</span>';
 });
 
 
@@ -434,15 +441,26 @@ $$('');
 
 
 
-var content = document.getElementById("content");
 // content.appendChild(_instanciable.executeJsMethod($$('simpleView')));
 
+var _content = document.getElementById("content");
 var showObject = ()=>
 {
   var name = location.hash && location.hash.substring(1) || "instanciable";
   console.log("LOAD",name);
-  content.innerHTML = '';
-  content.appendChild(($$(name,'object.simpleView')));
+  _content.innerHTML = '';
+  _content.appendChild(htmlToElement($$(name,'object.simpleView')));
+}
+
+var _selectedDescriptor = document.getElementById("selectedDescriptor");
+var selectedDescriptor;
+var updateSelectedDescriptor = descriptor=>
+{
+  console.log("updateSelectedDescriptor()","descriptor",descriptor);
+  _selectedDescriptor.innerHTML = '';
+  _selectedDescriptor.appendChild(htmlToElement($$(descriptor,'descriptorFrom.htmlSmallDescription')));
+
+  selectedDescriptor = descriptor;
 }
 
 window.addEventListener("hashchange", showObject);
