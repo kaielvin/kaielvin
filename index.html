@@ -169,7 +169,7 @@ class Node
     // return jsMethod.j(this);
   }
 
-  $$(i2,i3,i4)
+  $(i2,i3,i4)
   {
     return $$(this,i2,i3,i4);
   }
@@ -365,6 +365,7 @@ $$('jsMethod (primitive)');
 
 $$('person (instanciable)');
 $$('string person.name');
+$$().$(_instanceOf,'person').$('person.name',{s:'Kai Elvin'});
 
 // $$('claimType > typeFromOne > object');
 $$('instanciable claimType.typeFrom');
@@ -403,7 +404,7 @@ $$('string object.simpleView',o=>
   var objectFromTypes = _object.getToType_froms($$('claimType.typeFrom'));
   _.pullAll(objectFromTypes,instanciableFromTypes);
 
-  var otherFromTypes = o.getTo_types();
+  var otherFromTypes = o.getFrom_types();
   _.pullAll(otherFromTypes,instanciableFromTypes);
   _.pullAll(otherFromTypes,objectFromTypes);
 
@@ -443,9 +444,9 @@ $$('string object.simpleView',o=>
   if(instanciable)
   {
     var createDescriptior = $$()
-      .$$(_instanceOf,"descriptorFrom")
-      .$$('descriptorFrom.to',o)
-      .$$('descriptorFrom.type',_instanceOf);
+      .$(_instanceOf,"descriptorFrom")
+      .$('descriptorFrom.to',o)
+      .$('descriptorFrom.type',_instanceOf);
     elements.push('<div>instance of: '+$$(instanciable,'object.link')
         +(instanciable == _instanciable ? ' <span class="link" onclick="createInDescriptor($$(\''+createDescriptior.id+'\'))">[new]</span>' : '')
       +'</div><br/>');
