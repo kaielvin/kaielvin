@@ -189,6 +189,10 @@ function makeNode(name)
   node.setFromType(_strid,{s:name});
   return _nodeNameIndex[name] = node;
 }
+function stridToNode(strid)
+{
+  return _nodeNameIndex[strid];
+}
 var _object = makeNode("object");
 var _anything = makeNode("anything");
 var _instanceOf = makeNode("object.instanceOf");
@@ -285,7 +289,6 @@ function $$(i1,i2,i3,i4)
     return typeFrom;
   }
 
-
   /*
   "a (b)" implies:
     "a instanceOf b"
@@ -344,6 +347,34 @@ var valueToHtml = value=>
       // : value.b != undefined ? (value.b?'true':'false')
       : value; // should be number
 
+
+
+function makeUnique(typeTos)
+{
+    console.log('makeUnique()');
+  // perform intersection of all the sets of (to,type)->froms
+  typeTos.forEach(([type,to])=>
+    console.log('makeUnique()',$$(type,'object.prettyString'),$$(to,'object.prettyString'),$$(to).getToType_froms($$(type)).map( from=> $$(from,'object.prettyString') ) ) );
+  var fromss = typeTos.map(([type,to])=>$$(to).getToType_froms($$(type)));
+  fromss = _.sortBy(fromss,froms=>froms.length);
+  // console.log('makeUnique()',fromss.map(froms=>froms.map( from=> $$(from,'object.prettyString') )));
+  var uniques = fromss[0];
+  for(var i=1;i<fromss.length && uniques.length > 0;i++)
+  {
+    uniques = _.intersection(uniques,fromss[i]);
+    console.log('makeUnique()','uniques.length',uniques.length);
+  }
+
+    console.log('makeUnique()','uniques.length',uniques.length,uniques.length&&$$(uniques[0],'object.prettyString'));
+  // one or more found
+  if(uniques.length > 0) return uniques[0];
+
+  // else create one
+  var unique = $$();
+  typeTos.forEach(([type,to])=>$$(unique,type,to));
+  return unique;
+}
+
 // $$('objectSingleton (instanciable)');
 // $$('object (objectSingleton)');
 // $$('object -> link > jsMethod');
@@ -374,8 +405,22 @@ $$('boolean      claimType.multipleValues');
 $$('boolean      claimType.functional');
 $$('jsMethod     claimType.resolve');
 
-$$('string object.prettyString',o=>o.getFromType_string($$('person.name')) || o.name);
+$$('string object.prettyString',o=>
+{
+  var instanciable = o.getFromType_node(_instanceOf);
+  var instanciableMethod = instanciable && stridToNode(instanciable.name+'.prettyString');
+  return instanciableMethod && $$(o,instanciableMethod) || o.getFromType_string($$('person.name')) || o.name;
+});
 $$('string object.link',o=>'<a href="#'+o.name+'">'+$$(o,'object.prettyString')+'</a>');
+
+$$('string object.htmlSmallDescription',o=>
+{
+  var instanciable = o.getFromType_node(_instanceOf);
+  var instanciableMethod = instanciable && stridToNode(instanciable.name+'.htmlSmallDescription');
+  console.log("object.htmlSmallDescription()","instanciableMethod",instanciable.name+'.htmlSmallDescription',instanciableMethod);
+  return $$(o,instanciableMethod || 'object.link')
+});
+
 $$('string object.simpleView',o=>
 {
   console.log("object.simpleView()","id",o.id);
@@ -410,10 +455,15 @@ $$('string object.simpleView',o=>
 
   var fromTypeToLi = type=>
   {
-    var descriptor = $$();
-    $$(descriptor,_instanceOf,"descriptorTo");
-    $$(descriptor,'descriptorTo.from',o);
-    $$(descriptor,'descriptorTo.type',type);
+    var descriptor = makeUnique([
+      [_instanceOf,"descriptorTo"],
+      ['descriptorTo.from',o],
+      ['descriptorTo.type',type],
+    ]);
+    // var descriptor = $$();
+    // $$(descriptor,_instanceOf,"descriptorTo");
+    // $$(descriptor,'descriptorTo.from',o);
+    // $$(descriptor,'descriptorTo.type',type);
     return $$(descriptor,'descriptorTo.htmlList');
   }
 
@@ -431,10 +481,15 @@ $$('string object.simpleView',o=>
 
   var toTypeToLi = type=>
   {
-    var descriptor = $$();
-    $$(descriptor,_instanceOf,"descriptorFrom");
-    $$(descriptor,'descriptorFrom.to',o);
-    $$(descriptor,'descriptorFrom.type',type);
+    var descriptor = makeUnique([
+      [_instanceOf,"descriptorFrom"],
+      ['descriptorFrom.to',o],
+      ['descriptorFrom.type',type],
+    ]);
+    // var descriptor = $$();
+    // $$(descriptor,_instanceOf,"descriptorFrom");
+    // $$(descriptor,'descriptorFrom.to',o);
+    // $$(descriptor,'descriptorFrom.type',type);
     return $$(descriptor,'descriptorFrom.htmlList');
   }
 
@@ -443,12 +498,18 @@ $$('string object.simpleView',o=>
 
   if(instanciable)
   {
-    var createDescriptior = $$()
-      .$(_instanceOf,"descriptorFrom")
-      .$('descriptorFrom.to',o)
-      .$('descriptorFrom.type',_instanceOf);
+    var descriptor = makeUnique([
+      [_instanceOf,"descriptorFrom"],
+      ['descriptorFrom.to',o],
+      ['descriptorFrom.type',_instanceOf],
+    ]);
+
+    // var descriptor = $$()
+    //   .$(_instanceOf,"descriptorFrom")
+    //   .$('descriptorFrom.to',o)
+    //   .$('descriptorFrom.type',_instanceOf);
     elements.push('<div>instance of: '+$$(instanciable,'object.link')
-        +(instanciable == _instanciable ? ' <span class="link" onclick="createInDescriptor($$(\''+createDescriptior.id+'\'))">[new]</span>' : '')
+        +(instanciable == _instanciable ? ' <span class="link" onclick="createInDescriptor($$(\''+descriptor.id+'\'))">[new]</span>' : '')
       +'</div><br/>');
   }
 
@@ -510,7 +571,19 @@ $$('string    descriptorTo.htmlList',o=>
     )
     +'</li>'
 });
-
+$$('string descriptorTo.prettyString',o=>
+      "["  +$$($$(o,'descriptorTo.from'),'object.prettyString')
+     +" > "+$$($$(o,'descriptorTo.type'),'object.prettyString')
+     +"]");
+$$('string descriptorTo.htmlSmallDescription',o=>
+{
+  var from = $$(o,'descriptorTo.from');
+  var type = $$(o,'descriptorTo.type');
+  return '<span>'
+      +'Selected: ['+$$(from,'object.link')+_.escape(" > ")+$$(type,'object.link')+']'
+      +'<br/><span class="link" onclick="createInDescriptor($$(\''+o.id+'\'))">[new]</span>'
+    +'</span>';
+});
 
 $$('object    descriptorFrom.to');
 $$('claimType descriptorFrom.type');
@@ -547,6 +620,10 @@ $$('string    descriptorFrom.htmlList',o=>
     +' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
     +'</li>'
 });
+$$('string descriptorFrom.prettyString',o=>
+      "["  +$$($$(o,'descriptorFrom.to'  ),'object.prettyString')
+     +" < "+$$($$(o,'descriptorFrom.type'),'object.prettyString')
+     +"]");
 $$('string descriptorFrom.htmlSmallDescription',o=>
 {
   var to   = $$(o,'descriptorFrom.to');
@@ -555,7 +632,7 @@ $$('string descriptorFrom.htmlSmallDescription',o=>
   // console.log("descriptorFrom.onSelect()","o.id",o.id,"froms",froms.map(o=>o.name).join(', '));
   console.log("descriptorFrom.htmlSmallDescription()","descriptor",o,$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link'));
   return '<span>'
-      +'Selected: '+$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link')
+      +'Selected: ['+$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link')+']'
       +'<br/><span class="link" onclick="createInDescriptor($$(\''+o.id+'\'))">[new]</span>'
     +'</span>';
 });
@@ -588,7 +665,7 @@ var updateSelectedDescriptor = descriptor=>
 {
   console.log("updateSelectedDescriptor()","descriptor",descriptor);
   _selectedDescriptor.innerHTML = '';
-  _selectedDescriptor.appendChild(htmlToElement($$(descriptor,'descriptorFrom.htmlSmallDescription')));
+  _selectedDescriptor.appendChild(htmlToElement($$(descriptor,'object.htmlSmallDescription')));
 
   selectedDescriptor = descriptor;
 }
