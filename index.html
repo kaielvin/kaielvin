@@ -74,7 +74,7 @@ class Node
   }
   get name()
   {
-    return this.getFromType_string(_title) || this.id;
+    return this.getFromType_string(_strid) || this.id;
   }
   setFromType(type,to)
   {
@@ -89,6 +89,13 @@ class Node
       var froms = oldTo.typeFroms[type.id];
       // if(froms) delete froms[this.id];
       if(froms) _.remove(froms,this);
+    }
+
+    // reindex strid
+    if(type == _strid)
+    {
+      delete _nodeNameIndex[this.getFromType_string(_strid)];
+      _nodeNameIndex[to.s] = this;
     }
 
     this.typeTos[type.id] = to;
@@ -161,11 +168,16 @@ class Node
     // if(!jsMethod.j) return undefined;
     // return jsMethod.j(this);
   }
+
+  $$(i2,i3,i4)
+  {
+    return $$(this,i2,i3,i4);
+  }
 }
 
 var _nodeNameIndex = {};
-var _title = _nodeNameIndex["object.title"] = new Node();
-_title.setFromType(_title,{s:"object.title"});
+var _strid = _nodeNameIndex["object.strid"] = new Node();
+_strid.setFromType(_strid,{s:"object.strid"});
 function makeNode(name)
 {
   if(name instanceof Node) return name;
@@ -174,7 +186,7 @@ function makeNode(name)
   node = _idToNodeIndex[name];
   if(node) return node;
   node = new Node();
-  node.setFromType(_title,{s:name});
+  node.setFromType(_strid,{s:name});
   return _nodeNameIndex[name] = node;
 }
 var _object = makeNode("object");
@@ -269,7 +281,8 @@ function $$(i1,i2,i3,i4)
       $$(claimType,'claimType.resolve',i2);
     }
 
-    return claimType;
+    // return claimType;
+    return typeFrom;
   }
 
 
@@ -342,13 +355,16 @@ $$('boolean (instanciable)');
 $$('true (boolean)');
 $$('false (boolean)');
 
-$$('string object.title');
+$$('string object.strid');
 $$('instanciable object.instanceOf');
 
 $$('primitive (instanciable)');
 $$('string (primitive)');
 $$('number (primitive)');
 $$('jsMethod (primitive)');
+
+$$('person (instanciable)');
+$$('string person.name');
 
 // $$('claimType > typeFromOne > object');
 $$('instanciable claimType.typeFrom');
@@ -357,7 +373,8 @@ $$('boolean      claimType.multipleValues');
 $$('boolean      claimType.functional');
 $$('jsMethod     claimType.resolve');
 
-$$('string object.link',o=>'<a href="#'+o.name+'">'+o.name+'</a>');
+$$('string object.prettyString',o=>o.getFromType_string($$('person.name')) || o.name);
+$$('string object.link',o=>'<a href="#'+o.name+'">'+$$(o,'object.prettyString')+'</a>');
 $$('string object.simpleView',o=>
 {
   console.log("object.simpleView()","id",o.id);
@@ -421,7 +438,18 @@ $$('string object.simpleView',o=>
   }
 
   var elements = [];
-  elements.push('<h1>'+o.name+'</h1>');
+  elements.push('<h1>'+$$(o,'object.prettyString')+'</h1>');
+
+  if(instanciable)
+  {
+    var createDescriptior = $$()
+      .$$(_instanceOf,"descriptorFrom")
+      .$$('descriptorFrom.to',o)
+      .$$('descriptorFrom.type',_instanceOf);
+    elements.push('<div>instance of: '+$$(instanciable,'object.link')
+        +(instanciable == _instanciable ? ' <span class="link" onclick="createInDescriptor($$(\''+createDescriptior.id+'\'))">[new]</span>' : '')
+      +'</div><br/>');
+  }
 
   elements.push((instanciableFromTypes.length > 0 || instanciableToTypes.length > 0)
     && '<div>as '+$$(instanciable,'object.link')+':</div>');
@@ -466,6 +494,7 @@ $$('string    descriptorTo.htmlList',o=>
 {
   var type = $$(o,'descriptorTo.type');
   var functional = type.getFromType_boolean($$('claimType.functional'));
+  var toType = $$(type,'claimType.typeTo');
   var to = !functional && $$(o,'descriptorTo.resolve');
   return '<li>'
     +$$(type,'object.link')
@@ -473,7 +502,10 @@ $$('string    descriptorTo.htmlList',o=>
     + (functional
       ? '*functional*'
       : valueToHtml(to)
-      +' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
+        + (toType === $$("string")
+          ? ' <span class="link" onclick="editStringDescriptor($$(\''+o.id+'\'))">[edit]</span>'
+          : ' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
+          )
     )
     +'</li>'
 });
@@ -536,10 +568,14 @@ $$('');
 // content.appendChild(_instanciable.executeJsMethod($$('simpleView')));
 
 var _content = document.getElementById("content");
+var selectedNode = _instanciable;
 var showObject = (node)=>
 {
-  if(!node) node = _instanciable;
+  if(!node) node = selectedNode;
   if(_.isString(node)) node = $$(node);
+  if(!node) node = selectedNode;
+  selectedNode = node;
+  location.hash = node.name;
   // console.log("LOAD",name);
   _content.innerHTML = '';
   _content.appendChild(htmlToElement($$(node,'object.simpleView')));
@@ -554,6 +590,15 @@ var updateSelectedDescriptor = descriptor=>
   _selectedDescriptor.appendChild(htmlToElement($$(descriptor,'descriptorFrom.htmlSmallDescription')));
 
   selectedDescriptor = descriptor;
+}
+var editStringDescriptor = descriptor=>
+{
+  var value = $$(descriptor,"descriptorTo.resolve");
+  var newString = prompt("string value:", value&&value.s);
+  if(newString === null) return;
+  $$( $$(descriptor,"descriptorTo.from"),$$(descriptor,"descriptorTo.type"),{s:newString} );
+  showObject();
+
 }
 var createInDescriptor = descriptor=>
 {
