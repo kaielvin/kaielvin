@@ -2,9 +2,14 @@
     <head>
         <!-- <link rel="stylesheet" href="index.css"> -->
         <style>
+body
+{
+  background: black;
+  color: white;
+}
 a, .link
 {
-  color: blue;
+  color: #9f9;
   text-decoration: none;
   cursor: pointer;
 }
@@ -18,6 +23,7 @@ a:hover, .link:hover
 }
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" type="text/javascript"></script>
+        <script src="https://apis.google.com/js/api.js"></script>
     </head>
     <body>
 
@@ -308,10 +314,22 @@ function $$(i1,i2,i3,i4)
   if(!fromObject) fromObject = makeNode(i1);
 
 
+
+  var typeObject;
+  if(_.isString(i2) && !i2.includes('.')) i2 = '.'+i2;
+  if(_.isString(i2) && i2[0] == '.')
+  {
+    var instanciable = fromObject.getFromType_node(_instanceOf);
+    if(instanciable) typeObject = stridToNode(instanciable.name+i2);
+    if(!typeObject) typeObject = stridToNode('object'+i2);
+    if(!typeObject) console.error('$$()',i2,"not found on",fromObject.name);
+    if(!typeObject) return;
+  }
+  else typeObject = makeNode(i2);
+
   // make from type to claim
   if(i2 && i3)
   {
-    var typeObject = makeNode(i2);
     var to = i3;
 
     // if(_.isFunction(to))
@@ -327,12 +345,17 @@ function $$(i1,i2,i3,i4)
   // get from type, or execute jsMethod
   if(i2)
   {
-    var typeObject = makeNode(i2);
     // if(typeObject.getFromType_node(_typeTo) == _jsMethod)
     if(typeObject.getFromType_node(makeNode('claimType.functional')) == makeNode('true'))
       return fromObject.executeJsMethod(typeObject);
     else
-      return fromObject.getFromType_node(typeObject);
+    {
+      var toValue = fromObject.getFromType_to(typeObject);
+      return toValue === undefined ? undefined
+           : toValue.s ? toValue.s
+           : toValue;
+      // return fromObject.getFromType_node(typeObject);
+    }
   }
 
   return fromObject;
@@ -351,10 +374,10 @@ var valueToHtml = value=>
 
 function makeUnique(typeTos)
 {
-    console.log('makeUnique()');
+    // console.log('makeUnique()');
   // perform intersection of all the sets of (to,type)->froms
-  typeTos.forEach(([type,to])=>
-    console.log('makeUnique()',$$(type,'object.prettyString'),$$(to,'object.prettyString'),$$(to).getToType_froms($$(type)).map( from=> $$(from,'object.prettyString') ) ) );
+  // typeTos.forEach(([type,to])=>
+  //   console.log('makeUnique()',$$(type,'object.prettyString'),$$(to,'object.prettyString'),$$(to).getToType_froms($$(type)).map( from=> $$(from,'object.prettyString') ) ) );
   var fromss = typeTos.map(([type,to])=>$$(to).getToType_froms($$(type)));
   fromss = _.sortBy(fromss,froms=>froms.length);
   // console.log('makeUnique()',fromss.map(froms=>froms.map( from=> $$(from,'object.prettyString') )));
@@ -362,10 +385,10 @@ function makeUnique(typeTos)
   for(var i=1;i<fromss.length && uniques.length > 0;i++)
   {
     uniques = _.intersection(uniques,fromss[i]);
-    console.log('makeUnique()','uniques.length',uniques.length);
+    // console.log('makeUnique()','uniques.length',uniques.length);
   }
 
-    console.log('makeUnique()','uniques.length',uniques.length,uniques.length&&$$(uniques[0],'object.prettyString'));
+    // console.log('makeUnique()','uniques.length',uniques.length,uniques.length&&$$(uniques[0],'object.prettyString'));
   // one or more found
   if(uniques.length > 0) return uniques[0];
 
@@ -396,7 +419,7 @@ $$('jsMethod (primitive)');
 
 $$('person (instanciable)');
 $$('string person.name');
-$$().$(_instanceOf,'person').$('person.name',{s:'Kai Elvin'});
+var KaiElvin = $$().$(_instanceOf,'person').$('person.name',{s:'Kai Elvin'});
 
 // $$('claimType > typeFromOne > object');
 $$('instanciable claimType.typeFrom');
@@ -411,7 +434,9 @@ $$('string object.prettyString',o=>
   var instanciableMethod = instanciable && stridToNode(instanciable.name+'.prettyString');
   return instanciableMethod && $$(o,instanciableMethod) || o.getFromType_string($$('person.name')) || o.name;
 });
-$$('string object.link',o=>'<a href="#'+o.name+'">'+$$(o,'object.prettyString')+'</a>');
+$$('string object.link',o=>'<a href="#'+o.name+'/'+$$(o,'defaultView')+'">'+$$(o,'object.prettyString')+'</a>');
+$$('string object.defaultView',o=>"simpleView");
+;
 
 $$('string object.htmlSmallDescription',o=>
 {
@@ -425,26 +450,11 @@ $$('string object.simpleView',o=>
 {
   console.log("object.simpleView()","id",o.id);
 
-  // var instanciable = o.getFromType_node(_instanceOf) || _object;
   var instanciable = o.getFromType_node(_instanceOf);
-
-  // var fromTypes = o.getFrom_types();
-  // var fromTypesValues = fromTypes.map(type=>
-  // {
-  //   var value = o.getFromType_to(type);
-  //   var valueHtml = value instanceof Node ? $$(value,'object.link')
-  //     : value.s ? '"'+value.s+'"'
-  //     : value.j ? '*function*'
-  //     // : value.b != undefined ? (value.b?'true':'false')
-  //     : value; // should be number
-
-  //   return '<li>'+$$(type,'object.link')+' > '+valueHtml+'</li>'
-  // });
 
   var instanciableFromTypes = instanciable &&
     instanciable.getToType_froms($$('claimType.typeFrom'))
     || [];
-  // if(instanciableFromTypes) instanciableFromTypes = instanciableFromTypes.filter(type=>type.getFromType_boolean($$('claimType.functional'))
 
   var objectFromTypes = _object.getToType_froms($$('claimType.typeFrom'));
   _.pullAll(objectFromTypes,instanciableFromTypes);
@@ -454,18 +464,11 @@ $$('string object.simpleView',o=>
   _.pullAll(otherFromTypes,objectFromTypes);
 
   var fromTypeToLi = type=>
-  {
-    var descriptor = makeUnique([
-      [_instanceOf,"descriptorTo"],
-      ['descriptorTo.from',o],
-      ['descriptorTo.type',type],
-    ]);
-    // var descriptor = $$();
-    // $$(descriptor,_instanceOf,"descriptorTo");
-    // $$(descriptor,'descriptorTo.from',o);
-    // $$(descriptor,'descriptorTo.type',type);
-    return $$(descriptor,'descriptorTo.htmlList');
-  }
+    $$(makeUnique([
+        [_instanceOf,"descriptorTo"],
+        ['descriptorTo.from',o],
+        ['descriptorTo.type',type],
+      ]),'descriptorTo.htmlList');
 
 
   var instanciableToTypes = instanciable &&
@@ -480,18 +483,11 @@ $$('string object.simpleView',o=>
   _.pullAll(otherToTypes,objectToTypes);
 
   var toTypeToLi = type=>
-  {
-    var descriptor = makeUnique([
-      [_instanceOf,"descriptorFrom"],
+    $$(makeUnique([
+        [_instanceOf,"descriptorFrom"],
       ['descriptorFrom.to',o],
       ['descriptorFrom.type',type],
-    ]);
-    // var descriptor = $$();
-    // $$(descriptor,_instanceOf,"descriptorFrom");
-    // $$(descriptor,'descriptorFrom.to',o);
-    // $$(descriptor,'descriptorFrom.type',type);
-    return $$(descriptor,'descriptorFrom.htmlList');
-  }
+      ]),'descriptorFrom.htmlList');
 
   var elements = [];
   elements.push('<h1>'+$$(o,'object.prettyString')+'</h1>');
@@ -504,10 +500,6 @@ $$('string object.simpleView',o=>
       ['descriptorFrom.type',_instanceOf],
     ]);
 
-    // var descriptor = $$()
-    //   .$(_instanceOf,"descriptorFrom")
-    //   .$('descriptorFrom.to',o)
-    //   .$('descriptorFrom.type',_instanceOf);
     elements.push('<div>instance of: '+$$(instanciable,'object.link')
         +(instanciable == _instanciable ? ' <span class="link" onclick="createInDescriptor($$(\''+descriptor.id+'\'))">[new]</span>' : '')
       +'</div><br/>');
@@ -643,20 +635,133 @@ $$('');
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function authenticate() {
+  return gapi.auth2.getAuthInstance()
+      .signIn({scope: "https://www.googleapis.com/auth/youtube.readonly"})
+      .then(function() { console.log("Sign-in successful"); },
+            function(err) { console.error("Error signing in", err); });
+}
+function loadClient() {
+  gapi.client.setApiKey("AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc");
+  return gapi.client.load("https://www.googleapis.com/discovery/v1/apis/youtube/v3/rest")
+      .then(function() { console.log("GAPI client loaded for API"); },
+            function(err) { console.error("Error loading GAPI client for API", err); });
+}
+  gapi.load("client:auth2", function() {
+    gapi.auth2.init({client_id: "YOUR_CLIENT_ID"});
+  });
+// authenticate().then(loadClient);
+
+$$('YoutubeVideo (instanciable)');
+$$('string YoutubeVideo.title');
+$$('yLuOzNeHw5I').$(_instanceOf,"YoutubeVideo");
+
+
+$$('string YoutubeVideo.defaultView',o=>"page");
+$$('string YoutubeVideo.page',async o=>
+{
+  if(!$$(o,'YoutubeVideo.title'))
+  {
+    var fetched = await fetch('https://www.googleapis.com/youtube/v3/videos?id='+o.name+'&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&part=snippet,contentDetails,statistics,status');
+    var snippet = await fetched.json();
+    snippet = snippet && snippet.items;
+    snippet = snippet && snippet[0];
+    snippet = snippet && snippet.snippet;
+    if(snippet && snippet.title) o.$('title',{s:snippet.title});
+
+    // var fetched2 = await fetch('https://www.googleapis.com/youtube/v3/playlists?part=id%2Csnippet&channelId=UCDDe2Yh15Yj4ljU_2f311mQ');
+    // var snippet2 = await fetched2.json();
+    // console.log(snippet2);
+  }
+  return '<div>'
+      +'<h1>'+($$(o,'title')||o.name)+'</h1>'
+      +'<iframe width="1000" height="600" src="https://www.youtube.com/embed/'+o.name+'" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>'
+    +'</div>';
+});
+
+
+// https://www.youtube.com/oembed?format=json&amp;url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DnnVq6gmatHU
+// https://www.googleapis.com/youtube/v3/videos?id=nnVq6gmatHU&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&part=snippet,contentDetails,statistics,status
+//https://www.youtube.com/embed/HIbAz29L-FA?modestbranding=1&playsinline=0&showinfo=0&enablejsapi=1&origin=https%3A%2F%2Fintercoin.org&widgetid=1
+// var url = new URL('https://www.youtube.com/watch?v=PZozMO3wWf&l=01234567');
+// console.log(url,url.searchParams.keys(),url.searchParams.get('v'));
+// for (let p of url.searchParams) {
+//   console.log(p);
+// }
+/*
+
+
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // content.appendChild(_instanciable.executeJsMethod($$('simpleView')));
 
 var _content = document.getElementById("content");
 var selectedNode = _instanciable;
-var showObject = (node)=>
+var showObject = async (node)=>
 {
+  var method = 'object.simpleView';
   if(!node) node = selectedNode;
-  if(_.isString(node)) node = $$(node);
+  if(_.isString(node)) 
+  {
+    var split = node.split('/');
+    if(split.length >= 2)
+    {
+      node = split[0];
+      method = split[1];
+    }
+    node = $$(node);
+  }
   if(!node) node = selectedNode;
   selectedNode = node;
-  location.hash = node.name;
-  // console.log("LOAD",name);
+  var hash = node.name;
+  if(method != 'object.simpleView' && method != 'simpleView')
+    hash+= '/'+method;
+  location.hash = hash;
+  console.log("showObject()","LOAD",node.name,method,'#'+hash);
   _content.innerHTML = '';
-  _content.appendChild(htmlToElement($$(node,'object.simpleView')));
+
+  if(!method.includes('.')) method = '.'+method;
+  _content.appendChild(htmlToElement(  await Promise.resolve( $$(node,method) )  ));
 }
 
 var _selectedDescriptor = document.getElementById("selectedDescriptor");
@@ -684,8 +789,9 @@ var createInDescriptor = descriptor=>
   showObject(instance);
 }
 
-window.addEventListener("hashchange", ()=>showObject(location.hash && location.hash.substring(1) || "instanciable"));
-showObject();
+var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring(1) || "instanciable");
+window.addEventListener("hashchange", showObjectFromHash);
+showObjectFromHash();
 
 
 
@@ -707,6 +813,29 @@ showObject();
 
 // var content = document.getElementById("content");
 // content.appendChild(makeList(list));
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 </script>
 
