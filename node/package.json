@@ -13,6 +13,9 @@
     "cookie-parser": "^1.4.5",
     "cors": "^2.8.5",
     "express": "^4.17.1",
-    "lodash": "^4.17.15"
+    "lodash": "^4.17.15",
+    "minisearch": "^2.2.2",
+    "node-fetch": "^2.6.0",
+    "ws": "^7.2.3"
   }
 }

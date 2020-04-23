@@ -1,6 +1,8 @@
 var _ = _ || require('lodash'); // already defined on the frontend version
+var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
 
-
+// used by JS methods in the graph to access server specific values and functions
+var ServerContext = {};
 
 /**
  * @param {String} HTML representing a single element
@@ -29,10 +31,55 @@ var valueToString = value=>
        !value                 ? 'undefined'
       : value instanceof Node ? value.name
       : value.s               ? 's_'+value.s
+      // : value.b               ? 'b_'+value.b
       : value.n               ? 'n_'+value.n
       :                         'j_';
       // : value.j               ? 'j_'
       // :                         'b_'+value.b;
+
+
+
+var fulltextSearch = new MiniSearch({
+  fields: ['strid', 'title', 'instanciable', 'description'], // fields to index for full-text search
+  storeFields: ['id'], // fields to return with search results
+  searchOptions: {
+    boost: { strid: 10, title: 8, instanciable: 2, description: 1 },
+    prefix: true,
+    fuzzy: 0.2,
+  }
+});
+fulltextSearch.documentById = {};
+
+var nodeTofullTextDocument = node=>
+{
+  var instanciable = node.$('instanceOf');
+  var doc = {id:node.id};
+  doc.strid = node.$('strid');
+  doc.title = node.$('title');
+  doc.instanciable = instanciable && instanciable.$('strid');
+  doc.description = node.$('description');
+  return doc;
+}
+var nodesToFullTextIndex = {};
+var willUpdateFullTextIndexForNode = node=>
+{
+  var id = node.id;
+
+  if(!nodesToFullTextIndex[id])
+  nodesToFullTextIndex[id] = _.debounce(()=>
+  {
+    if(fulltextSearch.documentById[id])
+      fulltextSearch.remove(fulltextSearch.documentById[id]);
+    var doc = fulltextSearch.documentById[id] = nodeTofullTextDocument(node);
+    fulltextSearch.add(doc);
+    // console.log("FULLTEXT",JSON.stringify(doc));
+    delete nodesToFullTextIndex[id];
+  }
+  ,500);
+
+  nodesToFullTextIndex[id]();
+}
+
 
 
 var _idToNodeIndex = {};
@@ -49,31 +96,45 @@ class Node
   {
     return this.getFromType_string(_strid) || this.id;
   }
-  setFromType(type,to)
+  setFromType(type,to,forceAsMultible=false)
   {
-    // TODO check type.multipleValues and override if not true
-    // if(!this.typeTos[type.id]) this.typeTos[type.id] = {};
-    // if()
+    if(to && to.s) willUpdateFullTextIndexForNode(this);
 
-    // removes this from the old to's typeFroms index
-    var oldTo = this.typeTos[type.id];
-    if(oldTo && oldTo instanceof Node)
+    var multipleValues = type.getFromType_to(_multipleValues) == _true || forceAsMultible;
+    if(multipleValues)
     {
-      var froms = oldTo.typeFroms[type.id];
-      // if(froms) delete froms[this.id];
-      if(froms) _.remove(froms,this);
+      if(!(to instanceof Node)) return console.error("Node.setFromType() multipleValues of not Node unsupported yet.",this.name,type.name);
+      if(!this.typeTos[type.id]) this.typeTos[type.id] = {};
+      this.typeTos[type.id][to.id] = true;
+      // console.log("setFromType() multipleValues",this.typeTos[type.id]);
+      // if(!this.typeTos[type.id]) this.typeTos[type.id] = [];
+      // this.typeTos[type.id].push(to);
+    }
+    else
+    {
+      // removes this from the old to's typeFroms index
+      var oldTo = this.typeTos[type.id];
+      if(oldTo && oldTo instanceof Node)
+      {
+        var froms = oldTo.typeFroms[type.id];
+        // if(froms) delete froms[this.id];
+        if(froms) _.remove(froms,this);
+      }
+
+      // reindex strid
+      if(type == _strid)
+      {
+        delete _nodeNameIndex[this.getFromType_string(_strid)];
+        _nodeNameIndex[to.s] = this;
+      }
+
+      if(to&&to.j) to.j = eval('('+String(to.j)+')');
+      // if(to&&to.j) console.log(String(to.j));
+      // if(to&&to.j) console.log(eval('('+String(to.j)+')'));
+      
+      this.typeTos[type.id] = to;
     }
 
-    // reindex strid
-    if(type == _strid)
-    {
-      delete _nodeNameIndex[this.getFromType_string(_strid)];
-      _nodeNameIndex[to.s] = this;
-    }
-
-    if(to&&to.j) to.j = eval(String(to.j));
-
-    this.typeTos[type.id] = to;
 
     // add this to the new to's typeFroms index
     if(to instanceof Node)
@@ -86,13 +147,19 @@ class Node
       froms.push(this);
     }
 
-    console.log(_.padEnd(this.name,25),_.padEnd(type.name,15),valueToString(to));
+    if(Node.printoutInserts) console.log(_.padEnd(this.name,25),_.padEnd(type.name,15),valueToString(to).substring(0,40));
     // console.log(this.id,type.id,to instanceof Node ? to.id
     //   // : to.b !== undefined ? (to.b ? 'bool(true)' : 'bool(false)')
     //   : to.s               ? '"'+_.escape(to.s)+'"'
     //   : to.j               ? '*function*'
     //   : to.n               ? 'number('+to.n+')'
     //   :                      '*unknown*' );
+  }
+  getFromType_nodes(type)
+  {
+    var set = this.typeTos[type.id];
+    if(!(set instanceof Object)) return [];
+    return _.keys(set).map(id=>Node.makeById(id));
   }
   getFromType_to(type)
   {
@@ -131,31 +198,50 @@ class Node
     return _.keys(this.typeFroms).map(id=>_idToNodeIndex[id]);
   }
 
-  executeJsMethod(type)
+  executeJsMethod(type,...args)
   {
     var jsMethod = type.getFromType_to(makeNode('claimType.resolve'));
     if(!(jsMethod instanceof Object)) return undefined;
     if(!jsMethod.j) return undefined;
-    return jsMethod.j(this);
-    // var instanciable = _object;
-    // var jsMethod = instanciable.typeTos[type.id];
-    // if(!(jsMethod instanceof Object)) return undefined;
-    // if(!jsMethod.j) return undefined;
-    // return jsMethod.j(this);
+    return jsMethod.j(this,...args);
   }
 
   $(i2,i3,i4)
   {
     return $$(this,i2,i3,i4);
   }
+
+  $froms(type)
+  {
+    type = strToType(type,this); // should maybe not seach the to's instanciable methods…
+    if(!type) return [];
+    return this.getToType_froms(type);
+  }
+
+  $ex(method,...args)
+  {
+    method = strToType(method,this);
+    var jsMethod = method.getFromType_to(makeNode('claimType.resolve'));
+    if(!(jsMethod instanceof Object)) return undefined;
+    if(!jsMethod.j) return undefined;
+    return jsMethod.j.call(this,...args);
+  }
 }
 Node.makeById = id=> _idToNodeIndex[id] || new Node(id);
 
 var _nodeNameIndex = {};
-var _strid = _nodeNameIndex["object.strid"] = new Node('13d4c779');
-_strid.setFromType(_strid,{s:"object.strid"});
+
+var _strid          = _nodeNameIndex["object.strid"]             = new Node('13d4c779');
+var _multipleValues = _nodeNameIndex["claimType.multipleValues"] = new Node('d605bb65');
+var _true           = _nodeNameIndex["true"]                     = new Node('8d377661');
+
+_strid         .setFromType(_strid,{s:"object.strid"});
+_multipleValues.setFromType(_strid,{s:"claimType.multipleValues"});
+_true          .setFromType(_strid,{s:"true"});
+
 function makeNode(name,id=undefined)
 {
+  if(!name) throw new Error("undefined name");
   if(name instanceof Node) return name;
   var node = _nodeNameIndex[name];
   if(node) return node;
@@ -178,7 +264,27 @@ var _claimType = makeNode("claimType",'50fd3931');
 var _typeFrom = makeNode("claimType.typeFrom",'59f08f21');
 var _typeTo = makeNode("claimType.typeTo",'6d252ccf');
 var _jsMethod = makeNode("jsMethod",'291f3841');
+// var _multipleValues = makeNode("multipleValues",'d605bb65');
+// var _true = makeNode("true",'8d377661');
 
+
+function strToType(str,fromObject=undefined)
+{
+  // if(!str) throw new Error("undefined string input");
+  if(!str) return undefined;
+  if(str instanceof Node) return str;
+  var typeObject = undefined;
+  if(_.isString(str) && !str.includes('.')) str = '.'+str;
+  if(_.isString(str) && str[0] == '.' && fromObject)
+  {
+    var instanciable = fromObject.getFromType_node(_instanceOf);
+    if(instanciable) typeObject = stridToNode(instanciable.name+str);
+    if(!typeObject) typeObject = stridToNode('object'+str);
+    if(!typeObject) throw new Error('strToType() '+str+" not found on "+fromObject.name+" instanceof "+(instanciable&&instanciable.name));
+  }
+  else typeObject = makeNode(str);
+  return typeObject;
+}
 
 
 /*
@@ -207,7 +313,7 @@ function $$(i1,i2,i3,i4)
   "c a.b" implies:
     "a > a.b > c"
   */
-  var matchClaimType = _.isString(i1) && i1.match(/([^\ >]+)\ ([^\.>]+)\.([^.>]+)/);
+  var matchClaimType = _.isString(i1) && i1.match(/([^\ >]+(?: *\*|))\ ([^\.>]+)\.([^.>]+)/);
   // if(matchClaimType)
   //   console.log("$$ OVERRIDE",matchClaimType[2]+' > '+matchClaimType[2]+'.'+matchClaimType[3]+' > '+matchClaimType[1]);
   if(matchClaimType)
@@ -249,7 +355,9 @@ function $$(i1,i2,i3,i4)
     claimType.setFromType(_typeFrom,typeFrom);
     claimType.setFromType(_typeTo,  type__To);
     if(multipleValues)
-      claimType.setFromType($$('claimType.multipleValues'),{b:true});
+      // claimType.setFromType($$('claimType.multipleValues'),{b:true});
+      // claimType.setFromType($$('claimType.multipleValues'),makeNode('true'));
+      claimType.setFromType(_multipleValues,_true);
 
     if(i2 && _.isFunction(i2))
     {
@@ -282,16 +390,13 @@ function $$(i1,i2,i3,i4)
 
 
   var typeObject;
-  if(_.isString(i2) && !i2.includes('.')) i2 = '.'+i2;
-  if(_.isString(i2) && i2[0] == '.')
+  try
   {
-    var instanciable = fromObject.getFromType_node(_instanceOf);
-    if(instanciable) typeObject = stridToNode(instanciable.name+i2);
-    if(!typeObject) typeObject = stridToNode('object'+i2);
-    if(!typeObject) console.error('$$()',i2,"not found on",fromObject.name);
-    if(!typeObject) return;
+    typeObject = strToType(i2,fromObject);
   }
-  else typeObject = makeNode(i2);
+  catch(e){ return undefined; }
+  // console.log("$$()","i2",i2,"typeObject",typeObject)
+
 
   // make from type to claim
   if(i2 && i3)
@@ -309,16 +414,23 @@ function $$(i1,i2,i3,i4)
   }
   
   // get from type, or execute jsMethod
-  if(i2)
+  if(typeObject)
   {
     // if(typeObject.getFromType_node(_typeTo) == _jsMethod)
     if(typeObject.getFromType_node(makeNode('claimType.functional')) == makeNode('true'))
-      return fromObject.executeJsMethod(typeObject);
+      // return fromObject.executeJsMethod(typeObject);
+      return fromObject.$ex(typeObject,fromObject);
     else
     {
+      var multipleValues = typeObject.getFromType_to(_multipleValues) == _true;
+      if(multipleValues) return fromObject.getFromType_nodes(typeObject);
+
       var toValue = fromObject.getFromType_to(typeObject);
       return toValue === undefined ? undefined
            : toValue.s ? toValue.s
+           : toValue.j ? toValue.j
+           : toValue.n ? toValue.n
+           // : toValue.b ? toValue.b
            : toValue;
       // return fromObject.getFromType_node(typeObject);
     }
@@ -331,6 +443,8 @@ function $$(i1,i2,i3,i4)
 var valueToHtml = value=>
   value instanceof Node ? $$(value,'object.link')
       : value === undefined ? 'undefined'
+      : value.n ? ''+value.n
+      // : value.b ? (value.b?'true':'false')
       : value.s ? '"'+value.s+'"'
       : value.j ? '*function*'
       // : value.b != undefined ? (value.b?'true':'false')
@@ -367,5 +481,6 @@ function makeUnique(typeTos)
 
 
 
-module.exports = {htmlToElement,randHex,valueToString,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
+module.exports = {ServerContext,fulltextSearch,
+  htmlToElement,randHex,valueToString,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,};

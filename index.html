@@ -5,57 +5,291 @@
 body
 {
   background: black;
-  color: white;
+  color: #bbb;
+  font-family: Roboto, Arial, sans-serif;
+}
+input
+{
+  color: #bbb;
+  background: #333;
+}
+input:focus
+{
+  outline: none;
 }
 a, .link
 {
-  color: #9f9;
+  /*color: #8d8;*/
   text-decoration: none;
   cursor: pointer;
+  color: #bbb;
+  text-decoration-line: underline;
+  text-decoration-color: #ffffff22;
 }
-a:hover, .link:hover
+/*a:hover, .link:hover
 {
   text-decoration: underline;
-}
+}*/
 #selectedDescriptor
 {
   margin-top: 3em;
 }
+
+.items
+{
+  display: grid;
+  grid-template-columns: auto auto auto;
+  grid-column-gap: 10px;
+  grid-row-gap: 10px;
+}
+
+.items > div
+{
+    /*width: 100%;*/
+  /*padding-bottom: 70%;*/
+  height: 17em;
+}
+.items img
+{
+  object-fit: cover;
+  width: 100%;
+  height: 14em;  
+}
+
+:root {
+  --youtube-row-unit: 1em;
+}
+
+.rowView
+{
+  display: flex;
+  flex-direction: row;
+  padding: calc(var(--youtube-row-unit)/4);
+}
+.youtube.rowView img
+{
+  object-fit: cover;
+  width:        calc(var(--youtube-row-unit)*8);
+  height:       calc(var(--youtube-row-unit)*4*1.1);
+  margin-right: calc(var(--youtube-row-unit)/4);
+}
+.youtube.rowView > div
+{
+  margin: calc(var(--youtube-row-unit)/4);
+}
+.rowView .title
+{
+  font-weight: bold;
+  margin-bottom: calc(var(--youtube-row-unit)/4);
+}
+.rowView .tags, .rowView .subtitle
+{
+  font-size: 0.8em;
+}
+
+#headerSearch
+{
+  background: #222;
+  width: min(70vw, 50em);
+  margin: 0.4em;
+  padding: 0 0.8em;
+  height: 2.3em;
+  border: 0;
+  border-radius: 0.2em;
+}
+
+#searchResults
+{
+  position: relative;
+}
+#searchResultsContainer
+{
+  position: absolute;
+  background: #111;
+  padding: 0.8em;
+  border-radius: 0.4em;
+  min-width: 70vw;
+  visibility: hidden;
+}
+
+
+
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" type="text/javascript"></script>
+        <script src="https://cdn.jsdelivr.net/npm/minisearch@2.2.0/dist/umd/index.min.js"></script>
         <script>var require=()=>{};var module={};</script>
         <script src="./node/core.js" type="text/javascript"></script>
     </head>
     <body>
 
 <div id="app">
+    <div id="header">
+      <form onsubmit="onHeaderSearch()"><input type="text" id="headerSearch" oninput="onHeaderSearchChanged()" autocomplete="off" /></form>
+      <div id="searchResults"><div id="searchResultsContainer"></div></div>
+    </div>
     <div id="content"></div>
     <div id="selectedDescriptor"></div>
 </div>
 
 <script>
-
-
-
-
-async function importData(jsonPath)
+var wait = ms => new Promise((r, j)=>setTimeout(r, ms))
+var resolvablePromise = () =>
 {
-  var fetched = await fetch(jsonPath);
-  var json = await fetched.json();
-  // trusting the source and the format here
-  json.nodes.forEach(({id,claims})=>
+  var resolve,reject;
+  var associate = (r, j)=>{resolve = r;reject = j}
+  var promise = new Promise(associate);
+  promise.resolve = resolve;
+  promise.reject = reject;
+  return promise;
+}
+
+var loggedUser;
+
+const socket = new WebSocket('ws://localhost:8080');
+
+// Connection opened
+socket.addEventListener('open', function (event)
+{
+});
+
+var _wsRequestPromises = {};
+socket.addEventListener('message', function (event)
+{
+  console.log('Message from server ', event.data);
+  var json = JSON.parse(event.data);
+  _wsRequestPromises[json.requestId].resolve(json);
+});
+
+async function wsFetch(request)
+{
+  request.requestId = randHex();
+  var promise = resolvablePromise();
+  _wsRequestPromises[request.requestId] = promise;
+  socket.send(JSON.stringify(request));
+  var response = await promise;
+  importDataAsArray(response.data);
+  delete _wsRequestPromises[request.requestId];
+  return response;
+}
+
+
+
+
+
+async function onHeaderSearch()
+{
+  var input = document.getElementById('headerSearch').value;
+  var youtubeVideoUrlRegex = /https:\/\/www.youtube.com\/watch\?v=([a-zA-Z0-9\-]+)/;
+  var youtubeVideoUrlMatch = input.match(youtubeVideoUrlRegex);
+  if(youtubeVideoUrlMatch)
+  {
+    var vid = youtubeVideoUrlMatch[1];
+    // var response = await wsFetch({multiple:false,descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]});
+    var response = await wsFetch({request:"makeYouTubeVideo",vid});
+    showObject(response.videoId+'/page');
+  }
+  document.getElementById('headerSearch').value = '';
+}
+var searchResultsContainer = document.getElementById('searchResultsContainer');
+var searchInput = document.getElementById('headerSearch');
+async function onHeaderSearchChanged()
+{
+  searchResultsContainer.innerHTML = '';
+  var results = fulltextSearch.search(searchInput.value);
+  if(results.length > 25) results = results.slice(0,25);
+  results = results.map(({id})=>$$(id));
+
+  results.forEach(result=>
+  {
+    searchResultsContainer.appendChild(htmlToElement(result.$('rowView')));
+  });
+
+  searchResultsContainer.style.visibility = results.length > 0 ? "visible" : "hidden";
+}
+
+document.addEventListener('keyup', (e) => {
+  if(e.key == 'Escape')
+  {
+    clearHeaderSearch();
+  }
+});
+
+function clearHeaderSearch()
+{
+  // if(searchInput === document.activeElement)
+  var needed = searchResultsContainer.style.visibility == 'visible'
+    || searchInput.value != '';
+
+  searchResultsContainer.style.visibility = "hidden";
+  searchInput.value = '';
+
+  return needed;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+async function importDataAsArray(json)
+{
+  json.forEach(({id,claims,claimsFrom})=>
   {
     var node = Node.makeById(id);
     for(var typeId in claims)
     {
       var to = claims[typeId];
-      if(to && to.j) to.j = eval(to.j);
+      if(to && to.j) to.j = eval('('+to.j+')');
       if(_.isString(to)) to = Node.makeById(to);
       var type = Node.makeById(typeId);
-      node.setFromType(type,to);
+
+      // TODO set the set directly (or ensure taht multiple is sent ffirst multiple)
+      if(to && to.set) _.keys(to.set).forEach(id=>
+        node.setFromType(type,Node.makeById(id),true));
+      else node.setFromType(type,to);
+
+      if(claimsFrom) for(var typeId in claimsFrom)
+        claimsFrom[typeId].forEach(fromId=> $$(fromId,typeId,node) );
     }
   });
 }
+async function importData(jsonPath)
+{
+  var fetched = await fetch(jsonPath);
+  var json = await fetched.json();
+  // trusting the source and the format here
+  importDataAsArray(json.nodes);
+
+  // var script = await readFile("./scripts/"+scriptFileName, {encoding: 'utf8'});
+  // // var script = babel.transform(script, { "ast": false, "presets": ["stage-0"] }).code;
+
+  // // eval(script);
+  // script = new vm.Script(script, {
+  //   filename: scriptFileName, // filename for stack traces
+  //   lineOffset: 0, // line number offset to be used for stack traces
+  //   columnOffset: 0, // column number offset to be used for stack traces
+  //   displayErrors: true,
+  //   // timeout: 1000 // ms
+  // });
+  // // script.runInContext(context);
+  // var promise = script.runInThisContext(Object.assign({
+  //   require: require,
+  //   console: console,
+  //   params,
+  // }));
+  // await promise;
+
+}
+
 
 
 
@@ -65,8 +299,10 @@ async function importData(jsonPath)
 
 var _content = document.getElementById("content");
 var selectedNode = _instanciable;
-var showObject = async (node)=>
+var showObject = async (node,updateHash=true)=>
 {
+  clearHeaderSearch();
+
   var method = 'object.simpleView';
   if(!node) node = selectedNode;
   if(_.isString(node)) 
@@ -84,7 +320,7 @@ var showObject = async (node)=>
   var hash = node.name;
   if(method != 'object.simpleView' && method != 'simpleView')
     hash+= '/'+method;
-  location.hash = hash;
+  if(updateHash) location.hash = hash;
   console.log("showObject()","LOAD",node.name,method,'#'+hash);
   _content.innerHTML = '';
 
@@ -117,13 +353,107 @@ var createInDescriptor = descriptor=>
   showObject(instance);
 }
 
-var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring(1) || "instanciable");
+var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring(1) || "instanciable",false);
+
+
+
+
+// async function fetchYoutubePlaylist(playlistId,results=[],pageToken=undefined)
+// {
+//   console.log("fetchYoutubePlaylist()","pageToken",pageToken);
+//   var path = 'https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&playlistId='+playlistId+'&maxResults=50';
+//   if(pageToken) path+= '&pageToken='+pageToken;
+//   var fetched = await fetch(path);
+//   var json = await fetched.json();
+//   json.items.forEach(item=>
+//   {
+//     var vid = item.snippet.resourceId.videoId;
+//     console.log("fetchYoutubePlaylist()","videoId",vid);
+//     results.push(vid);
+//     $$(vid).$(_instanceOf,"YoutubeVideo").$('YoutubeVideo.title',{s:item.snippet.title});
+//   });
+//   if(json.nextPageToken) await fetchYoutubePlaylist(playlistId,results,json.nextPageToken);
+//   return results;
+//   // console.log("json",json);
+// }
+// async function fetchYoutubePlaylists(channelId,results=[],pageToken=undefined)
+// {
+//   console.log("fetchYoutubePlaylists()","pageToken",pageToken);
+//   var path = 'https://www.googleapis.com/youtube/v3/playlists?part=snippet&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&channelId='+channelId+'&maxResults=50';
+//   if(pageToken) path+= '&pageToken='+pageToken;
+//   var fetched = await fetch(path);
+//   var json = await fetched.json();
+//   json.items.forEach(item=>
+//   {
+//     var pid = item.id;
+//     console.log("fetchYoutubePlaylists()","playlistId",pid);
+//     results.push(pid);
+//     $$(pid).$(_instanceOf,"YoutubePlaylist").$('YoutubePlaylist.title',{s:item.snippet.title});
+//   });
+//   if(json.nextPageToken) await fetchYoutubePlaylists(channelId,results,json.nextPageToken);
+//   return results;
+//   // console.log("json",json);
+// }
+
+async function fetchYoutubeData(vid='IK7nBOLYzdE')
+{
+  var path = 'https://cors-anywhere.herokuapp.com/https://www.youtube.com/watch?v='+vid;
+  var fetched = await fetch(path);
+
+  var text = await fetched.text();
+  var match = text.match(/window\[\"ytInitialPlayerResponse\"\] = (.*)/);
+  if(!match) throw new Error('no json information found');
+
+  var json = match[1];
+  json = json.substring(0,json.length-1); // removes end ';'
+  json = JSON.parse(json);
+
+  // console.log('FOUND',json);
+  // console.log('FOUND',JSON.stringify(json,null,'    '));
+
+  var videoDetails = json.videoDetails;
+  var microformat = json.microformat;
+  var playerMicroformatRenderer = microformat.playerMicroformatRenderer;
+
+  var processedJson = {};
+  processedJson.fetchDate = new Date();
+  processedJson.title = videoDetails.title;
+  processedJson.lengthSeconds = Number(videoDetails.lengthSeconds);
+  processedJson.averageRating = videoDetails.averageRating;
+  processedJson.viewCount = Number(videoDetails.viewCount);
+  processedJson.publishDate = new Date(playerMicroformatRenderer.publishDate);
+  processedJson.uploadDate = new Date(playerMicroformatRenderer.uploadDate);
+  processedJson.description = playerMicroformatRenderer.description.simpleText;
+  processedJson.keywords = videoDetails.keywords;
+  processedJson.channelId = videoDetails.channelId;
+  processedJson.author = videoDetails.author;
+  processedJson.ownerChannelName = playerMicroformatRenderer.ownerChannelName;
+
+  var result = {};
+  result.sourceHtml = text;
+  result.extractedJson = json;
+  result.processedJson = processedJson;
+
+  return result;
+}
 
 (async ()=>
 {
+  // var fetched = await fetch('https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&pageToken=CAUQAQ&maxResults=5');
+  // var json = await fetched.json();
+  // console.log("json",json);
   await importData('http://localhost:3000/all');
+
+  loggedUser = $$('person').$froms('instanceOf').find(u=>u.$('title') == 'Kai Elvin');
+  console.log("loggedUser",loggedUser&&loggedUser.$('title'));
+
+  // var playlist = await fetchYoutubePlaylists('UCDDe2Yh15Yj4ljU_2f311mQ');
+  // fetchYoutubePlaylist('PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ');
+
   window.addEventListener("hashchange", showObjectFromHash);
   showObjectFromHash();
+
+  // fetchYoutubeData('xWggTb45brM');
 }
 )();
 
