@@ -1266,7 +1266,36 @@ function nodeToJson(node,includeFroms=false)
 
 app.get('/all', (req, res) =>
 {
-  res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
+  var claimJsons = [];
+  var lastClaimJsons = {};
+  for(var fromId in _idToNodeIndex)
+  {
+    var node = _idToNodeIndex[fromId];
+    for(var typeId in node.typeTos)
+    {
+      var claims = node.typeTos[typeId];
+      for(var claim of claims)
+      {
+        var claimJson = claim.toCompactJson();
+        
+        if(claimJson.f == lastClaimJsons.f) delete claimJson.f;
+        else lastClaimJsons.f = claimJson.f;
+        if(claimJson.T == lastClaimJsons.T) delete claimJson.T;
+        else lastClaimJsons.T = claimJson.T;
+        if(_.isEqual(claimJson.t,lastClaimJsons.t)) delete claimJson.t;
+        else lastClaimJsons.t = claimJson.t;
+        if(claimJson.c == lastClaimJsons.c) delete claimJson.c;
+        else lastClaimJsons.c = claimJson.c;
+        if(claimJson.d == lastClaimJsons.d) delete claimJson.d;
+        else lastClaimJsons.d = claimJson.d;
+
+        claimJsons.push(claimJson);
+      }
+    }
+  }
+  res.send({claims:claimJsons});
+
+  // res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
 });
 
 app.listen(port, () => console.log(`Example app listening on port ${port}!`))

@@ -158,45 +158,16 @@ class Node
     var {type,to} = claim; // claim.from should be this
     if(to && to.s) willUpdateFullTextIndexForNode(this);
 
-    var multipleValues = type.getFromType_to(_multipleValues) == _true || forceAsMultible;
-    // var multipleValues = to instanceof Node;
-    if(multipleValues)
+    if(type == _strid && to && to.s)
     {
-      if(!(to instanceof Node)) return console.error("Node.setFromType() multipleValues of not Node unsupported yet.",this.name,type.name);
-      if(!this.typeTos[type.id]) this.typeTos[type.id] = {};
-      this.typeTos[type.id][to.id] = claim;
-      // console.log("setFromType() multipleValues",this.typeTos[type.id]);
-      // if(!this.typeTos[type.id]) this.typeTos[type.id] = [];
-      // this.typeTos[type.id].push(to);
+      delete _nodeNameIndex[this.getFromType_string(_strid)];
+      _nodeNameIndex[to.s] = this;
     }
-    else
-    {
-      // removes this from the old to's typeFroms index
-      var oldClaim = this.typeTos[type.id];
-      var oldTo = oldClaim && oldClaim.to;
-      if(oldTo && oldTo instanceof Node)
-      {
-        var froms = oldTo.typeFroms[type.id];
-        // if(froms) delete froms[this.id];
-        // if(froms) _.remove(froms,this);
-        // if(froms) _.remove(froms,oldClaim);
-        if(froms) delete froms[this.id];
-      }
 
-      // reindex strid
-      if(type == _strid)
-      {
-        delete _nodeNameIndex[this.getFromType_string(_strid)];
-        _nodeNameIndex[to.s] = this;
-      }
-
-      if(to&&to.j) to.j = eval('('+String(to.j)+')');
-      // if(to&&to.j) console.log(String(to.j));
-      // if(to&&to.j) console.log(eval('('+String(to.j)+')'));
-      
-      // this.typeTos[type.id] = to;
-      this.typeTos[type.id] = claim;
-    }
+    var claims = this.typeTos[type.id];
+    if(!claims) claims = this.typeTos[type.id] = [];
+    claim.sameTosClaims = claims;
+    claims.push(claim);
 
 
     // add this to the new to's typeFroms index
@@ -204,11 +175,58 @@ class Node
     {
       var froms = to.typeFroms[type.id];
       if(!froms) froms = to.typeFroms[type.id] = {};
-      froms[this.id] = claim;
+      var fClaims = froms[this.id];
+      if(!fClaims) fClaims = froms[this.id] = [];
+      froms[this.id].push(claim);
       // if(!froms) froms = to.typeFroms[type.id] = [];
       // TODO check already in ?
       // froms.push(this);
     }
+
+
+
+
+    // var multipleValues = type.getFromType_to(_multipleValues) == _true || forceAsMultible;
+    // // var multipleValues = to instanceof Node;
+    // if(multipleValues)
+    // {
+    //   if(!(to instanceof Node)) return console.error("Node.setFromType() multipleValues of not Node unsupported yet.",this.name,type.name);
+    //   if(!this.typeTos[type.id]) this.typeTos[type.id] = {};
+    //   this.typeTos[type.id][to.id] = claim;
+    //   // console.log("setFromType() multipleValues",this.typeTos[type.id]);
+    //   // if(!this.typeTos[type.id]) this.typeTos[type.id] = [];
+    //   // this.typeTos[type.id].push(to);
+    // }
+    // else
+    // {
+    //   // removes this from the old to's typeFroms index
+    //   var oldClaim = this.typeTos[type.id];
+    //   var oldTo = oldClaim && oldClaim.to;
+    //   if(oldTo && oldTo instanceof Node)
+    //   {
+    //     var froms = oldTo.typeFroms[type.id];
+    //     // if(froms) delete froms[this.id];
+    //     // if(froms) _.remove(froms,this);
+    //     // if(froms) _.remove(froms,oldClaim);
+    //     if(froms) delete froms[this.id];
+    //   }
+
+    //   // reindex strid
+    //   if(type == _strid)
+    //   {
+    //     delete _nodeNameIndex[this.getFromType_string(_strid)];
+    //     _nodeNameIndex[to.s] = this;
+    //   }
+
+    //   if(to&&to.j) to.j = eval('('+String(to.j)+')');
+    //   // if(to&&to.j) console.log(String(to.j));
+    //   // if(to&&to.j) console.log(eval('('+String(to.j)+')'));
+      
+    //   // this.typeTos[type.id] = to;
+    //   this.typeTos[type.id] = claim;
+    // }
+
+
 
     if(Node.printoutInserts) console.log(_.padEnd(this.name,25),_.padEnd(type.name,15),valueToString(to).substring(0,40));
     // console.log(this.id,type.id,to instanceof Node ? to.id
@@ -221,25 +239,30 @@ class Node
 
   getFromType_nodes(type)
   {
-    var set = this.typeTos[type.id];
-    if(!(set instanceof Object)) return [];
-    return _.keys(set).map(id=>Node.makeById(id));
+    var claims = this.typeTos[type.id];
+    if(!claims) return [];
+    // if(claims instanceof Claim) return [claims.to]; // unexpected
+    return claims.map(claim=>claim.to);
+    // var set = this.typeTos[type.id];
+    // if(!(set instanceof Object)) return [];
+    // return _.keys(set).map(id=>Node.makeById(id));
   }
   getFromType_to(type)
   {
     var claim = this.typeTos[type.id];
-
-    if(!(this.typeTos[type.id] instanceof Claim))
-      for(var key in claim)
-        return claim[key].to;
-
-    return claim && claim.to;
+    if(!claim) return undefined; // TODO try to return _undefined to allow chaining
+    // if(_.isArray(claim)) // should have at least 1 claim
+      return _.first(claim).to;
+    // if(!(this.typeTos[type.id] instanceof Claim))
+    //   for(var key in claim)
+    //     return claim[key].to;
+    // return claim.to;
   }
   getFromType_boolean(type)
   {
     var to = this.getFromType_to(type);
     if(!(to instanceof Node)) return false;
-    return to === $$('true');
+    return to === _true;
   }
   getFromType_string(type)
   {
@@ -295,7 +318,7 @@ class Node
   {
     method = strToType(method,this);
     var jsMethod = method.getFromType_to(makeNode('claimType.resolve'));
-    console.log("$ex",String(jsMethod.j))
+    // console.log("$ex",String(jsMethod.j))
     if(!(jsMethod instanceof Object)) return undefined;
     if(!jsMethod.j) return undefined;
     try

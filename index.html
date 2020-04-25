@@ -247,11 +247,11 @@ document.addEventListener('keyup', (e) => {
   if(searchInput !== document.activeElement)
   {
     var menu = document.getElementsByClassName("menu")[0];
-    console.log(menu instanceof Element);
-    console.log(menu);
+    // console.log(menu instanceof Element);
+    // console.log(menu);
     var options = menu && menu.getElementsByClassName("option");
     options = options && Array.prototype.slice.call(options) || [];
-    console.log(options);
+    // console.log(options);
 
     options = options && options.map(option=>
       {
@@ -345,12 +345,34 @@ async function importDataAsArray(json)
 
   console.log('importDataAsArray()',JSON.stringify(json,null,'    '));
 }
+
+async function importClaims(claimJsons)
+{
+  var lastClaimJsons = {};
+  for(var claimJson of claimJsons)
+  {
+    if(!claimJson.f) claimJson.f = lastClaimJsons.f;
+    else lastClaimJsons.f = claimJson.f;
+    if(!claimJson.T) claimJson.T = lastClaimJsons.T;
+    else lastClaimJsons.T = claimJson.T;
+    if(!claimJson.t) claimJson.t = lastClaimJsons.t;
+    else lastClaimJsons.t = claimJson.t;
+    if(!claimJson.c) claimJson.c = lastClaimJsons.c;
+    else lastClaimJsons.c = claimJson.c;
+    if(!claimJson.d) claimJson.d = lastClaimJsons.d;
+    else lastClaimJsons.d = claimJson.d;
+    var claim = Claim.fromCompactJson(claimJson);
+    claim.from.addClaim(claim);
+  }
+}
+
 async function importData(jsonPath)
 {
   var fetched = await fetch(jsonPath);
   var json = await fetched.json();
   // trusting the source and the format here
-  importDataAsArray(json.nodes);
+  // importDataAsArray(json.nodes);
+  importClaims(json.claims);
 
   // var script = await readFile("./scripts/"+scriptFileName, {encoding: 'utf8'});
   // // var script = babel.transform(script, { "ast": false, "presets": ["stage-0"] }).code;
@@ -458,7 +480,7 @@ var showObject = async (node,updateHash=true)=>
   console.log("showObject()","LOAD",node.name,method,'#'+hash,
     "instanciable",instanciable&&instanciable.name,
     "method",methodObject&&methodObject.name);
-  console.log("showObject()","LOAD",html);
+  // console.log("showObject()","LOAD",html);
   _content.innerHTML = '';
 
   // if(!method.includes('.')) method = '.'+method;
