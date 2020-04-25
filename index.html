@@ -87,6 +87,17 @@ a, .link
   font-size: 0.8em;
 }
 
+#header
+{
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+#header form
+{
+  margin: 0;
+}
+
 #headerSearch
 {
   background: #222;
@@ -124,6 +135,7 @@ a, .link
 
 <div id="app">
     <div id="header">
+      <a href="#kaisHome">[h]</a>
       <form onsubmit="onHeaderSearch()"><input type="text" id="headerSearch" oninput="onHeaderSearchChanged()" autocomplete="off" /></form>
       <div id="searchResults"><div id="searchResultsContainer"></div></div>
     </div>
@@ -142,6 +154,26 @@ var resolvablePromise = () =>
   promise.reject = reject;
   return promise;
 }
+function findParent(tagname,el){
+  while (el){
+    if ((el.nodeName || el.tagName).toLowerCase()===tagname.toLowerCase()){
+      return el;
+    }
+    el = el.parentNode;
+  }
+  return null;
+}
+
+function htmlToElement(html) {
+    var template = document.createElement('template');
+    if(!html) html = '</span>undefinedHtml</span>';
+    html = html.trim(); // Never return a text node of whitespace as the result
+    template.innerHTML = html;
+    return template.content.firstChild;
+}
+
+
+
 
 var loggedUser;
 
@@ -186,7 +218,7 @@ async function onHeaderSearch()
     var vid = youtubeVideoUrlMatch[1];
     // var response = await wsFetch({multiple:false,descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]});
     var response = await wsFetch({request:"makeYouTubeVideo",vid});
-    showObject(response.videoId+'/page');
+    showObject(response.videoId);
   }
   document.getElementById('headerSearch').value = '';
 }
@@ -211,6 +243,35 @@ document.addEventListener('keyup', (e) => {
   if(e.key == 'Escape')
   {
     clearHeaderSearch();
+  }
+  if(searchInput !== document.activeElement)
+  {
+    var menu = document.getElementsByClassName("menu")[0];
+    console.log(menu instanceof Element);
+    console.log(menu);
+    var options = menu && menu.getElementsByClassName("option");
+    options = options && Array.prototype.slice.call(options) || [];
+    console.log(options);
+
+    options = options && options.map(option=>
+      {
+        var links = option.getElementsByTagName('a');
+        var link = links && links[0];
+        // console.log(link);
+        // console.log(link.href);
+        return link && link.href;
+      });
+
+    if(e.key == '.')               location.hash = "kaisHome";
+    if(e.key == '0' && options[0]) window.location.href = options[0];
+    else if(e.key == '0')          location.hash = "kaisHome";
+    // if(e.key == '0'              ) location.hash = "kaisHome";
+    // if(e.key == '9' && options[0]) location.hash = options[0].substring(1);
+    // if(e.key == '6' && options[1]) location.hash = options[1].substring(1);
+    // if(e.key == '3' && options[2]) location.hash = options[2].substring(1);
+    if(e.key == '1' && options[1]) window.location.href = options[1];
+    if(e.key == '2' && options[2]) window.location.href = options[2];
+    if(e.key == '3' && options[3]) window.location.href = options[3];
   }
 });
 
@@ -247,20 +308,42 @@ async function importDataAsArray(json)
     var node = Node.makeById(id);
     for(var typeId in claims)
     {
-      var to = claims[typeId];
-      if(to && to.j) to.j = eval('('+to.j+')');
-      if(_.isString(to)) to = Node.makeById(to);
       var type = Node.makeById(typeId);
 
-      // TODO set the set directly (or ensure taht multiple is sent ffirst multiple)
-      if(to && to.set) _.keys(to.set).forEach(id=>
-        node.setFromType(type,Node.makeById(id),true));
-      else node.setFromType(type,to);
+      var set = claims[typeId].set;
+      // if(set) console.log('importDataAsArray() set',typeId,JSON.stringify(set,null,'    '));
+      if(set)
+        _.keys(set).forEach(toId=>
+          node.addClaim(  new Claim(node,type,Node.makeById(toId),Node.makeById(set[toId].claimer),set[toId].date), true  )
+        );
+      else
+      {
+        var {to,claimer,date} = claims[typeId];
+        if(to && to.j) to.j = eval('('+to.j+')');
+        if(_.isString(to)) to = Node.makeById(to);
+
+        node.addClaim(  new Claim(node,type,to,Node.makeById(claimer),date)  );
+      }
 
       if(claimsFrom) for(var typeId in claimsFrom)
-        claimsFrom[typeId].forEach(fromId=> $$(fromId,typeId,node) );
+        claimsFrom[typeId].forEach(fromId=>
+      {
+
+      } );
     }
+
+    if(claimsFrom)
+    for(var typeId in claimsFrom)
+    {
+      var type = Node.makeById(typeId);
+      var {from,claimer,date} = claimsFrom[typeId];
+      from = Node.makeById(from);
+      from.addClaim(  new Claim(from,type,node,Node.makeById(claimer),date)  );
+    }
+
   });
+
+  console.log('importDataAsArray()',JSON.stringify(json,null,'    '));
 }
 async function importData(jsonPath)
 {
@@ -294,6 +377,51 @@ async function importData(jsonPath)
 
 
 
+document.addEventListener("click", e=>
+{
+  var aEl = findParent('a',e.target || e.srcElement);
+  if (!aEl) return;
+  var url = aEl.href;
+  var hash = url.split('#');
+  if(hash.length == 0) return;
+  hash = _.last(hash);
+  if(hash.includes('/')) return; // TODO, maybe
+  var node = $$(hash);
+  if(!node) console.error("on click,","unknown node",hash);
+  if(!node) return;
+  var instanciable = node.$('instanceOf');
+  if(instanciable && instanciable == $$('tag'))
+  {
+    var descriptor = makeUnique([
+        ['object.instanceOf','descriptorFrom'],
+        ['descriptorFrom.to',node],
+        ['descriptorFrom.type','object.tags'],
+      ])
+    var collection = makeUnique([
+        ['object.instanceOf','collection'],
+        ['collection.descriptor',descriptor],
+      ])
+    showObject(collection);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  if(instanciable && instanciable == $$('YoutubeChannel'))
+  {
+    var descriptor = makeUnique([
+        ['object.instanceOf','descriptorFrom'],
+        ['descriptorFrom.to',node],
+        ['descriptorFrom.type','YoutubeVideo.channel'],
+      ])
+    var collection = makeUnique([
+        ['object.instanceOf','collection'],
+        ['collection.descriptor',descriptor],
+      ])
+    showObject(collection);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  console.log("clicked",url);
+});
 
 // content.appendChild(_instanciable.executeJsMethod($$('simpleView')));
 
@@ -303,7 +431,8 @@ var showObject = async (node,updateHash=true)=>
 {
   clearHeaderSearch();
 
-  var method = 'object.simpleView';
+  // var method = 'object.simpleView';
+  var method;
   if(!node) node = selectedNode;
   if(_.isString(node)) 
   {
@@ -318,14 +447,23 @@ var showObject = async (node,updateHash=true)=>
   if(!node) node = selectedNode;
   selectedNode = node;
   var hash = node.name;
-  if(method != 'object.simpleView' && method != 'simpleView')
+  var instanciable = node.$('instanceOf');
+  var defaultMethod = instanciable && instanciable.$('defaultPageView') || 'simpleView';
+  if(!method) method = defaultMethod;
+  if(method != defaultMethod)
     hash+= '/'+method;
   if(updateHash) location.hash = hash;
-  console.log("showObject()","LOAD",node.name,method,'#'+hash);
+  var methodObject = strToType(method,node);
+  var html = methodObject && await node.$ex(methodObject);
+  console.log("showObject()","LOAD",node.name,method,'#'+hash,
+    "instanciable",instanciable&&instanciable.name,
+    "method",methodObject&&methodObject.name);
+  console.log("showObject()","LOAD",html);
   _content.innerHTML = '';
 
-  if(!method.includes('.')) method = '.'+method;
-  _content.appendChild(htmlToElement(  await Promise.resolve( $$(node,method) )  ));
+  // if(!method.includes('.')) method = '.'+method;
+  // _content.appendChild(htmlToElement(  await Promise.resolve( $$(node,method) )  ));
+  _content.appendChild(htmlToElement(  html  ));
 }
 
 var _selectedDescriptor = document.getElementById("selectedDescriptor");
