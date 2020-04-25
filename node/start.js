@@ -107,7 +107,7 @@ Promises.WorkerPool = WorkerPool;
 var _ = require('lodash');
 var {ServerContext,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
-  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod} = require('./core.js');
+  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod} = require('./public/core.js');
 
 const fetch = require("node-fetch");
 var fs = require('fs');
@@ -1221,6 +1221,7 @@ var cookieParser = require('cookie-parser');
 app.use(cookieParser());
 var cors = require('cors')
 app.use(cors())
+app.use(express.static('public'))
 
 
 function nodeToJson(node,includeFroms=false)
