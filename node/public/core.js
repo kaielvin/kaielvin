@@ -9,6 +9,41 @@ var ServerContext = {};
  * @return {Element}
  */
 
+
+function hash(str)
+{
+  var hash = 5381,
+      i    = str.length;
+
+  while(i) {
+    hash = (hash * 33) ^ str.charCodeAt(--i);
+  }
+
+  /* JavaScript does bitwise operations (like XOR, above) on 32-bit signed
+   * integers. Since we want the results to be always positive, convert the
+   * signed int to an unsigned by doing an unsigned bitshift. */
+  return hash >>> 0;
+}
+// var all01Sum = 0;
+// var all01Count = 0;
+function hashHex(str)
+{
+  var hashNum = hash(str);
+  var hashStr = hashNum.toString(16);
+  while(hashStr.length < 8) hashStr = '0'+hashStr;
+  // all01Sum+= hashTo01(hashStr);
+  // all01Count++;
+  // console.log(hashStr,hashTo01(hashStr),all01Sum/all01Count);
+  return hashStr;
+}
+// expected a 8 char hexadecimal
+function hashTo01(hashStr)
+{
+  const ffffffff = 4294967295;
+  var hashNum = parseInt(hashStr, 16);
+  return hashNum / ffffffff;
+}
+
 var randHex = function(len=8) {
   var maxlen = 8,
       min = Math.pow(16,Math.min(len,maxlen)-1) 
@@ -48,9 +83,9 @@ var nodeTofullTextDocument = node=>
 {
   var instanciable = node.$('instanceOf');
   var doc = {id:node.id};
-  doc.strid = node.$('strid');
+  doc.strid = node.strid;
   doc.title = node.$('title');
-  doc.instanciable = instanciable && instanciable.$('strid');
+  doc.instanciable = instanciable && instanciable.strid;
   doc.description = node.$('description');
   if(doc.strid && !_.isString(doc.strid))
   {
@@ -108,7 +143,7 @@ class Claim
     if(date && !(date instanceof Date)) date = new Date(date);
     this.date = date || new Date();
 
-    if(Claim.onNewClaim) Claim.onNewClaim(this);
+    Object.freeze(this);
   }
   toCompactJson()
   {
@@ -121,6 +156,39 @@ class Claim
     var d = this.date.valueOf();
     return {f,T,t,c,d};
   }
+  get idStr()
+  {
+    var j = this.toCompactJson();
+    return j.f
+      +' '+j.T
+      +' '+(_.isString(j.t)?j.t:JSON.stringify(j.t))
+      +' '+j.c
+      +' '+j.d;
+  }
+  get id()
+  {
+    var j = this.toCompactJson();
+    var str = j.f
+      +' '+j.T
+      +' '+(_.isString(j.t)?j.t:JSON.stringify(j.t))
+      +' '+j.c
+      +' '+j.d
+    // console.log(str);
+    return hashHex(str);
+  }
+}
+Claim.idIndex = {};
+Claim.comb = _.fill(Array(500), 0);
+Claim.make = function(from_,type,to,claimer,date)
+{
+  var claim = new Claim(from_,type,to,claimer,date);
+  var id = claim.id;
+  var fromIndex = Claim.idIndex[id];
+  if(fromIndex) return fromIndex; // already indexed
+  claim.from.addClaim(claim);
+  if(Claim.onNewClaim) Claim.onNewClaim(claim);
+  Claim.comb[Math.floor(Claim.comb.length * hashTo01(id) )]++;
+  return Claim.idIndex[id] = claim;
 }
 Claim.fromCompactJson = function(json)
 {
@@ -131,7 +199,7 @@ Claim.fromCompactJson = function(json)
             :                      json.t;
   var claimer = Node.makeById(json.c);
   var date = new Date(json.d);
-  return new Claim(from_,type,to,claimer,date);
+  return Claim.make(from_,type,to,claimer,date);
 }
 
 
@@ -147,26 +215,39 @@ class Node
   }
   get name()
   {
-    return this.getFromType_string(_strid) || this.id;
+    // return this.getFromType_string(_strid) || this.id;
+    return this.strid || this.id;
   }
   setFromType(type,to)
   {
-    return this.addClaim(new Claim(this,type,to,Node.defaultUser));
+    // return this.addClaim(Claim.make(this,type,to,Node.defaultUser));
+    var claim = Claim.make(this,type,to,Node.defaultUser); // will call this.addClaim() if needed
+    // console.log("Node.setFromType()","claim",claim.id,claim.idStr);
   }
-  addClaim(claim,)
+  addClaim(claim)
   {
     var {type,to} = claim; // claim.from should be this
     if(to && to.s) willUpdateFullTextIndexForNode(this);
 
-    if(type == _strid && to && to.s)
+    // if(type == _strid && to && to.s)
+    if(type == _strid && to && to.s && this.stridDate)
     {
-      delete _nodeNameIndex[this.getFromType_string(_strid)];
-      _nodeNameIndex[to.s] = this;
+    console.log("reset strid (Node.addClaim)",this.id,"strid",claim.id,claim.date,this.strid,'=>',to.s,this.stridDate);
+
+    }
+    if(type == _strid && to && to.s
+      && (!this.stridDate || claim.date.valueOf() > this.stridDate.valueOf())
+      && (!_stridClaims[to.s] || claim.date.valueOf() > _stridClaims[to.s].date.valueOf()))
+    {
+      delete _stridClaims[this.strid];
+      _stridClaims[to.s] = claim;
+      this.strid = to.s;
+      this.stridDate = claim.date;
     }
 
     var claims = this.typeTos[type.id];
     if(!claims) claims = this.typeTos[type.id] = [];
-    claim.sameTosClaims = claims;
+    // claim.sameTosClaims = claims;
     claims.push(claim);
 
     // add this to the new to's typeFroms index
@@ -181,14 +262,24 @@ class Node
       // TODO check already in ?
       // froms.push(this);
     }
-    if(Node.printoutInserts) console.log(_.padEnd(this.name,25),_.padEnd(type.name,15),valueToString(to).substring(0,40));
+    // if(Node.printoutInserts) console.log(_.padEnd(this.name,25),_.padEnd(type.name,15),valueToString(to).substring(0,40));
   }
 
-  getFromType_nodes(type)
+  getFromType_nodes(type,unique=true,byDate=true)
   {
     var claims = this.typeTos[type.id];
     if(!claims) return [];
+
+    if(unique) claims = _.uniqBy(claims,c=>c.to.id);
+    if(byDate) claims = _.sortBy(claims,c=>c.date.valueOf());
     // if(claims instanceof Claim) return [claims.to]; // unexpected
+    // var tosMap = {}
+    // for(var claim of claims)
+    //   tosMap[claim.to.id] = claim;
+    // var tos = [];
+    // for(var toId in tosMap)
+    //   tos.push(tosMap[toId]);
+    // return tos;
     return claims.map(claim=>claim.to);
     // var set = this.typeTos[type.id];
     // if(!(set instanceof Object)) return [];
@@ -196,10 +287,14 @@ class Node
   }
   getFromType_to(type)
   {
-    var claim = this.typeTos[type.id];
-    if(!claim) return undefined; // TODO try to return _undefined to allow chaining
+    var claims = this.typeTos[type.id];
+    if(!claims) return undefined; // TODO try to return _undefined to allow chaining
     // if(_.isArray(claim)) // should have at least 1 claim
-      return _.last(claim).to;
+    // if(claims.length > 1 && claims[0].to && claims[0].to.s)
+    //   console.log("getFromType_to() claims.length > 1",this.name,'>',type.name,'>',
+    //     claims.map(claim=>claim.to && claim.to.s).join(' — '));
+    return _.maxBy(claims,c=>c.date.valueOf()).to;
+    // return _.last(claim).to;
     // if(!(this.typeTos[type.id] instanceof Claim))
     //   for(var key in claim)
     //     return claim[key].to;
@@ -243,7 +338,7 @@ class Node
 
   executeJsMethod(type,...args)
   {
-    var jsMethod = type.getFromType_to(makeNode('claimType.resolve'));
+    var jsMethod = type.getFromType_to(_resolve);
     if(!(jsMethod instanceof Object)) return undefined;
     if(!jsMethod.j) return undefined;
     return jsMethod.j(this,...args);
@@ -264,7 +359,7 @@ class Node
   $ex(method,...args)
   {
     method = strToType(method,this);
-    var jsMethod = method.getFromType_to(makeNode('claimType.resolve'));
+    var jsMethod = method.getFromType_to(_resolve);
     // console.log("$ex",String(jsMethod.j))
     if(!(jsMethod instanceof Object)) return undefined;
     if(!jsMethod.j) return undefined;
@@ -280,51 +375,86 @@ class Node
 }
 Node.makeById = id=> _idToNodeIndex[id] || new Node(id);
 
-var _nodeNameIndex = {};
+var _stridClaims = {};
 
 
-
-var _strid          = _nodeNameIndex["object.strid"]             = new Node('13d4c779');
-var _multipleValues = _nodeNameIndex["claimType.multipleValues"] = new Node('d605bb65');
-var _true           = _nodeNameIndex["true"]                     = new Node('8d377661');
-var _kaielvin       = _nodeNameIndex["kaielvin"]                 = new Node('d086fe37');
-Node.defaultUser = _kaielvin;
-
-_strid         .setFromType(_strid,{s:"object.strid"});
-_multipleValues.setFromType(_strid,{s:"claimType.multipleValues"});
-_true          .setFromType(_strid,{s:"true"});
-_kaielvin      .setFromType(_strid,{s:"kaielvin"});
 
 function makeNode(name,id=undefined)
 {
   if(!name) throw new Error("undefined name");
   if(name instanceof Node) return name;
-  var node = _nodeNameIndex[name];
-  if(node) return node;
+  var stridClaim = _stridClaims[name];
+  if(stridClaim) return stridClaim.from;
   node = _idToNodeIndex[name];
   if(node) return node;
   if(id) node = _idToNodeIndex[id];
   if(!node) node = new Node(id);
-  node.setFromType(_strid,{s:name});
-  return _nodeNameIndex[name] = node;
+  if(node.strid != name)
+    node.setFromType(_strid,{s:name});
+  return node;
+}
+function resolveIntoNode(value)
+{
+  if(value instanceof Node) return value;
+  var stridClaim = _stridClaims[value];
+  if(stridClaim) return stridClaim.from;
+  var node = _idToNodeIndex[value];
+  if(node) return node;
+  return undefined;
 }
 function stridToNode(strid)
 {
-  return _nodeNameIndex[strid];
+  var stridClaim = _stridClaims[strid];
+  return stridClaim && stridClaim.from;
 }
-var _object = makeNode("object",'8dd2a277');
-var _anything = makeNode("anything",'f0cfe989');
-var _instanceOf = makeNode("object.instanceOf",'19c0f376');
-var _instanciable = makeNode("instanciable",'ce0b87e4');
-var _claimType = makeNode("claimType",'50fd3931');
-var _typeFrom = makeNode("claimType.typeFrom",'59f08f21');
-var _typeTo = makeNode("claimType.typeTo",'6d252ccf');
-var _jsMethod = makeNode("jsMethod",'291f3841');
-var _undefined = makeNode("undefined",'29f087a1');
-var _claimType_defaultValue = makeNode("claimType.defaultValue",'d87ad258');
-// var _multipleValues = makeNode("multipleValues",'d605bb65');
-// var _true = makeNode("true",'8d377661');
 
+
+// var _strid          = _stridClaims["object.strid"]             = Node.makeById('13d4c779');
+// var _multipleValues = _stridClaims["claimType.multipleValues"] = Node.makeById('d605bb65');
+// var _true           = _stridClaims["true"]                     = Node.makeById('8d377661');
+// var _kaielvin       = _stridClaims["kaielvin"]                 = Node.makeById('d086fe37');
+
+var _strid          = Node.makeById('13d4c779');
+var _multipleValues = Node.makeById('d605bb65');
+var _true           = Node.makeById('8d377661');
+var _object         = Node.makeById('8dd2a277');
+var _anything       = Node.makeById('f0cfe989');
+var _instanceOf     = Node.makeById('19c0f376');
+var _instanciable   = Node.makeById('ce0b87e4');
+var _claimType      = Node.makeById('50fd3931');
+var _typeFrom       = Node.makeById('59f08f21');
+var _typeTo         = Node.makeById('6d252ccf');
+var _jsMethod       = Node.makeById('291f3841');
+var _undefined      = Node.makeById('29f087a1');
+var _defaultValue   = Node.makeById('d87ad258');
+var _functional     = Node.makeById('bc92e4bd');
+var _resolve        = Node.makeById('d26ffe55');
+var _kaielvin       = Node.makeById('d086fe37');
+
+Node.defaultUser = _kaielvin;
+
+Node.initCore = function()
+{
+  _strid            .setFromType(_strid,{s:"object.strid"});
+  _multipleValues   .setFromType(_strid,{s:"claimType.multipleValues"});
+  _true             .setFromType(_strid,{s:"true"});
+  _object           .setFromType(_strid,{s:"object"});
+  _anything         .setFromType(_strid,{s:"anything"});
+  _instanceOf       .setFromType(_strid,{s:"object.instanceOf"});
+  _instanciable     .setFromType(_strid,{s:"instanciable"});
+  _claimType        .setFromType(_strid,{s:"claimType"});
+  _typeFrom         .setFromType(_strid,{s:"claimType.typeFrom"});
+  _typeTo           .setFromType(_strid,{s:"claimType.typeTo"});
+  _jsMethod         .setFromType(_strid,{s:"jsMethod"});
+  _undefined        .setFromType(_strid,{s:"undefined"});
+  _defaultValue     .setFromType(_strid,{s:"claimType.defaultValue"});
+  _functional       .setFromType(_strid,{s:"claimType.functional"});
+  _resolve          .setFromType(_strid,{s:"claimType.resolve"});
+  _kaielvin         .setFromType(_strid,{s:"kaielvin"});
+
+  // var _multipleValues = makeNode("multipleValues",'d605bb65');
+  // var _true = makeNode("true",'8d377661');
+}
 
 function strToType(str,fromObject=undefined)
 {
@@ -340,7 +470,7 @@ function strToType(str,fromObject=undefined)
     if(!typeObject) typeObject = stridToNode('object'+str);
     if(!typeObject) throw new Error('strToType() '+str+" not found on "+fromObject.name+" instanceof "+(instanciable&&instanciable.name));
   }
-  else typeObject = makeNode(str);
+  else typeObject = resolveIntoNode(str);
   return typeObject;
 }
 
@@ -419,8 +549,8 @@ function $$(i1,i2,i3,i4)
 
     if(i2 && _.isFunction(i2))
     {
-      $$(claimType,'claimType.functional','true');
-      $$(claimType,'claimType.resolve',i2);
+      $$(claimType,_functional,_true);
+      $$(claimType,_resolve,i2);
     }
 
     // return claimType;
@@ -443,7 +573,11 @@ function $$(i1,i2,i3,i4)
   
 
 
-  if(!fromObject) fromObject = makeNode(i1);
+
+
+
+  if(!fromObject) fromObject = resolveIntoNode(i1);
+  if(!fromObject) return undefined;
 
 
 
@@ -466,7 +600,7 @@ function $$(i1,i2,i3,i4)
     //   $$(fromObject,makeNode('functional'),makeNode('true'));
 
     if(_.isFunction(to)) to = {j:to};
-    if(_.isString(to)) to = makeNode(to);
+    if(_.isString(to)) to = resolveIntoNode(to);
     fromObject.setFromType(typeObject,to);
     return fromObject;
   }
@@ -475,7 +609,7 @@ function $$(i1,i2,i3,i4)
   if(typeObject)
   {
     // if(typeObject.getFromType_node(_typeTo) == _jsMethod)
-    if(typeObject.getFromType_node(makeNode('claimType.functional')) == makeNode('true'))
+    if(typeObject.getFromType_node(_functional) == _true)
       // return fromObject.executeJsMethod(typeObject);
       return fromObject.$ex(typeObject,fromObject);
     else
@@ -491,8 +625,8 @@ function $$(i1,i2,i3,i4)
            // : toValue.b ? toValue.b
            : toValue;
 
-      if(!toValue && typeObject != _claimType_defaultValue)
-        toValue = typeObject.$(_claimType_defaultValue);
+      if(!toValue && typeObject != _defaultValue)
+        toValue = typeObject.$(_defaultValue);
 
       return toValue;
       // return fromObject.getFromType_node(typeObject);
@@ -509,7 +643,7 @@ var valueToHtml = value=>
       : value.n ? ''+value.n
       // : value.b ? (value.b?'true':'false')
       : value.s ? '"'+value.s+'"'
-      : value.j ? '*function*'
+      : value.j ? '*function:l='+String(value.j).split('\n').length+'*'
       // : value.b != undefined ? (value.b?'true':'false')
       : value; // should be number
 
@@ -543,7 +677,127 @@ function makeUnique(typeTos)
 
 
 
+class ClaimStore
+{
+  constructor()
+  {
+    this.claims = [];
+    this.idIndex = {};
+    this.addClaim = this.addClaim.bind(this);
+  }
+  get length()
+  {
+    return this.claims.length;
+  }
+  addClaim(claim)
+  {
+    var id = claim.id;
+    if(this.idIndex[id]) return this;
+    this.idIndex[id] = claim;
+    this.claims.push(claim);
+    return this;
+  }
+  addAllNodeClaims(node,includeFroms=false)
+  {
+    for(var typeId in node.typeTos)
+      node.typeTos[typeId].forEach(this.addClaim);
+    if(includeFroms)
+    for(var typeId in node.typeFroms)
+    {
+      var perFromClaims = node.typeFroms[typeId];
+      for(var fromId in perFromClaims)
+        perFromClaims[fromId].forEach(this.addClaim);
+    }
+  }
+  toCompactJson()
+  {
+    var claimJsons = [];
+    var lastClaimJsons = {d:0};
+    var values = [];
+    var valuesMap = {};
+    var makeValueId = value=>
+    {
+      var str = _.isString(value) ? value : JSON.stringify(value);
+      var id = valuesMap[str];
+      if(id !== undefined) return id;
+      id = valuesMap[str] = values.length;
+      values.push(value);
+      return id;
+    }
+    // TODO could order to compact better.
+    // trusting the default order for now.
+    // chronological order is slightly better, but not worth the trouble
+    // this.claims = _.sortBy(this.claims,c=>c.date.valueOf());
+    for(var claim of this.claims)
+    {
+      var claimJson = claim.toCompactJson();
+      claimJson.f = makeValueId(claimJson.f);
+      claimJson.T = makeValueId(claimJson.T);
+      claimJson.t = makeValueId(claimJson.t);
+      claimJson.c = makeValueId(claimJson.c);
+      
+      if(claimJson.f === lastClaimJsons.f) delete claimJson.f;
+      else lastClaimJsons.f = claimJson.f;
+      if(claimJson.T === lastClaimJsons.T) delete claimJson.T;
+      else lastClaimJsons.T = claimJson.T;
+      if(_.isEqual(claimJson.t,lastClaimJsons.t)) delete claimJson.t;
+      else lastClaimJsons.t = claimJson.t;
+      if(claimJson.c === lastClaimJsons.c) delete claimJson.c;
+      else lastClaimJsons.c = claimJson.c;
+      if(claimJson.d === lastClaimJsons.d) delete claimJson.d;
+      else
+      {
+        var lastDate = claimJson.d;
+        // diff is shorter
+        claimJson.d-= lastClaimJsons.d;
+        lastClaimJsons.d = lastDate;
+      }
+
+      claimJsons.push(claimJson);
+    }
+    return {claims:claimJsons,values,v:1};
+  }
+}
+
+function importClaims(compactJson)
+{
+  var claims = [];
+  if(compactJson.v != 1)
+    throw new Error("unsupported compactJson version: "+compactJson.v);
+  var stats = _.fill(Array(8), {});
+  var lastClaimJsons = {d:0};
+  var values = compactJson.values;
+  for(var claimJson of compactJson.claims)
+  {
+    // console.log("importClaims()","claimJson",claimJson);
+
+    if(claimJson.f === undefined) claimJson.f = lastClaimJsons.f;
+    else lastClaimJsons.f = claimJson.f;
+    if(claimJson.T === undefined) claimJson.T = lastClaimJsons.T;
+    else lastClaimJsons.T = claimJson.T;
+    if(claimJson.t === undefined) claimJson.t = lastClaimJsons.t;
+    else lastClaimJsons.t = claimJson.t;
+    if(claimJson.c === undefined) claimJson.c = lastClaimJsons.c;
+    else lastClaimJsons.c = claimJson.c;
+
+    claimJson.f = values[claimJson.f];
+    claimJson.T = values[claimJson.T];
+    claimJson.t = values[claimJson.t];
+    claimJson.c = values[claimJson.c];
+
+    claimJson.d = (claimJson.d || 0) + lastClaimJsons.d;
+    lastClaimJsons.d = claimJson.d;
+    // console.log("importClaims()","claimJson",claimJson);
+    var claim = Claim.fromCompactJson(claimJson);
+    claims.push(claim);
+  }
+  return claims;
+}
+
+
+
 
 module.exports = {ServerContext,fulltextSearch,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
-  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,};
+  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
+  ClaimStore,importClaims,};

@@ -107,7 +107,8 @@ Promises.WorkerPool = WorkerPool;
 var _ = require('lodash');
 var {ServerContext,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
-  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod} = require('./public/core.js');
+  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
+  ClaimStore,importClaims,} = require('./public/core.js');
 
 const fetch = require("node-fetch");
 var fs = require('fs');
@@ -118,15 +119,29 @@ fss.readFile = promisify(fs.readFile);
 fss.writeFile = promisify(fs.writeFile);
 
 
+// overwritten right after
+// Claim.onNewClaim = claim=>
+// {
+//   console.log("Claim.onNewClaim() FROM DISK","ClaimID",claim.id,claim.idStr);
+// }
+
 var loadingFromDisk = fs.existsSync("./claims.jsonlist");
 if(loadingFromDisk)
 {
   var claimsStr = fs.readFileSync("./claims.jsonlist",{encoding:'utf8'});
-  var claims = claimsStr.split('\n').map(line=>
+  var claims = claimsStr.split('\n').map((line,i)=>
   {
     if(line.length == 0)return;
-    var claim = Claim.fromCompactJson(JSON.parse(line));
-    claim.from.addClaim(claim); // might not know about multipleValues on time
+    try
+    {
+      var claim = Claim.fromCompactJson(JSON.parse(line));
+    }
+    catch(e)
+    {
+      throw new Error("Problem parsing line "+(i+1)+" "+e.message+" LINE="+line);
+    }
+    
+    // claim.from.addClaim(claim); // might not know about multipleValues on time
     return claim;
   });
   console.log("Claims loaded from disk.","Claim count",claims.length-1);
@@ -136,6 +151,7 @@ if(loadingFromDisk)
 var stream = fs.createWriteStream("./claims.jsonlist", {flags:'a',encoding: 'utf8'});
 Claim.onNewClaim = claim=>
 {
+  console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
   var compactJson = claim.toCompactJson();
   stream.write(JSON.stringify(compactJson) + "\n");
 }
@@ -143,6 +159,7 @@ Claim.onNewClaim = claim=>
 
 if(!loadingFromDisk)
 {
+  Node.initCore();
 
   $$('instanciable (instanciable)');
   $$('jsMethod instanciable.make');
@@ -321,12 +338,22 @@ if(!loadingFromDisk)
     }
     return from_.getFromType_to(type);
   });
+  $$('object    descriptorTo.insert',function(value)
+  {
+    var type = o.getFromType_node($$('descriptorTo.type'));
+    if(!type) return undefined;
+    var from_ = o.getFromType_node($$('descriptorTo.from'));
+    if(!from_) return undefined;
+    $$(from_,type,value);
+    return from_;
+  });
   $$('string    descriptorTo.htmlList',o=>
   {
     var type = $$(o,'descriptorTo.type');
     var functional = type.getFromType_boolean($$('claimType.functional'));
     var toType = $$(type,'claimType.typeTo');
-    var to = !functional && $$(o,'descriptorTo.resolve');
+    var to = $$(o,'descriptorTo.resolve');
+    // var to = !functional && $$(o,'descriptorTo.resolve');
     to = _.isArray(to)
       ? $$('objectsToHtml','js') (to)
       : valueToHtml(to);
@@ -334,12 +361,14 @@ if(!loadingFromDisk)
       +$$(type,'object.link')
       +_.escape(' > ')
       + (functional
-        ? '*functional*'
+        ? to
         : to
-          + (toType === $$("string")
+          +(  (toType === $$("string"))
             ? ' <span class="link" onclick="editStringDescriptor($$(\''+o.id+'\'))">[edit]</span>'
+            : (toType === $$("jsMethod"))
+            ? ' <span class="link" onclick="editJavascriptDescriptor($$(\''+o.id+'\'))">[edit-JS]</span>'
             : ' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
-            )
+          )
       )
       +'</li>'
   });
@@ -376,6 +405,17 @@ if(!loadingFromDisk)
     var instance = new Node();
     $$(instance,type,to);
     return instance;
+  });
+  $$('object    descriptorFrom.insert',function(node)
+  {
+    if(!node) return undefined;
+    if(_.isString(node)) node = $$(node);
+    var type = this.$('descriptorFrom.type');
+    if(!type) return undefined;
+    var to = this.$('descriptorFrom.to');
+    if(!to) return undefined;
+    $$(node,type,to);
+    return node;
   });
   $$('string    descriptorFrom.htmlList',o=>
   {
@@ -1123,8 +1163,6 @@ if(!loadingFromDisk)
 
 
 
-
-
   // https://www.youtube.com/oembed?format=json&amp;url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DnnVq6gmatHU
   // https://www.googleapis.com/youtube/v3/videos?id=nnVq6gmatHU&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&part=snippet,contentDetails,statistics,status
   //https://www.youtube.com/embed/HIbAz29L-FA?modestbranding=1&playsinline=0&showinfo=0&enablejsapi=1&origin=https%3A%2F%2Fintercoin.org&widgetid=1
@@ -1181,6 +1219,31 @@ if(!loadingFromDisk)
 
 
 
+// $$('descriptorTo.htmlList','claimType.resolve',{j:o=>
+// {
+//   var type = $$(o,'descriptorTo.type');
+//   var functional = type.getFromType_boolean($$('claimType.functional'));
+//   var toType = $$(type,'claimType.typeTo');
+//   var to = $$(o,'descriptorTo.resolve');
+//   // var to = !functional && $$(o,'descriptorTo.resolve');
+//   to = _.isArray(to)
+//     ? $$('objectsToHtml','js') (to)
+//     : valueToHtml(to);
+//   return '<li>'
+//     +$$(type,'object.link')
+//     +_.escape(' > ')
+//     + (functional
+//       ? to
+//       : to
+//         +(  (toType === $$("string"))
+//           ? ' <span class="link" onclick="editStringDescriptor($$(\''+o.id+'\'))">[edit]</span>'
+//           : (toType === $$("jsMethod"))
+//           ? ' <span class="link" onclick="editJavascriptDescriptor($$(\''+o.id+'\'))">[edit-JS]</span>'
+//           : ' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
+//         )
+//     )
+//     +'</li>'
+// }});
 
 
 
@@ -1189,21 +1252,34 @@ if(!loadingFromDisk)
 
 
 
+  // $$('object    descriptorTo.insert',function(value)
+  // {
+  //   var type = this.getFromType_node($$('descriptorTo.type'));
+  //   if(!type) return undefined;
+  //   var from_ = this.getFromType_node($$('descriptorTo.from'));
+  //   if(!from_) return undefined;
+  //   // console.log("descriptorTo.insert()",from_.name,type.name,valueToString(value));
+  //   $$(from_,type,value);
+  //   return from_;
+  // });
+
+
+//   $$('object    descriptorFrom.insert',function(node)
+//   {
+//     if(!node) return undefined;
+//     if(_.isString(node)) node = $$(node);
+//     var type = this.$('descriptorFrom.type');
+//     if(!type) return undefined;
+//     var to = this.$('descriptorFrom.to');
+//     if(!to) return undefined;
+//     $$(node,type,to);
+//     return node;
+//   });
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
+// $$('object* person.clipboard');
 
 
 
@@ -1224,77 +1300,56 @@ app.use(cors())
 app.use(express.static('public'))
 
 
-function nodeToJson(node,includeFroms=false)
-{
-  var id = node.id;
+// function nodeToJson(node,includeFroms=false)
+// {
+//   var id = node.id;
 
-  // _.mapValues(node.typeTos,(claim,key)=>
-  //   {
-  //     if(key == 'set' || claim.to && claim.claimer) return;
-  //     console.log("to undefined",claim);
-  //     console.log("to undefined",claim.from);
-  //     console.log("to undefined",claim.type);
-  //     throw "stop";
-  //   });
+//   // _.mapValues(node.typeTos,(claim,key)=>
+//   //   {
+//   //     if(key == 'set' || claim.to && claim.claimer) return;
+//   //     console.log("to undefined",claim);
+//   //     console.log("to undefined",claim.from);
+//   //     console.log("to undefined",claim.type);
+//   //     throw "stop";
+//   //   });
 
 
-  var claims = _.mapValues(node.typeTos,tos=>
-  {
-    if(!(tos instanceof Claim))
-      return ({set:_.mapValues(tos,({claimer,date})=>({claimer:claimer.id,date}))});
+//   var claims = _.mapValues(node.typeTos,tos=>
+//   {
+//     if(!(tos instanceof Claim))
+//       return ({set:_.mapValues(tos,({claimer,date})=>({claimer:claimer.id,date}))});
 
-    var {to,claimer,date} = tos;
-    to =  to instanceof Node   ? to.id
-        : to.j                 ? {j:String(to.j)}
-        // : to.s                 ? to
-        // : to.n                 ? to
-        :                        to;
-    return {to,claimer:claimer.id,date};
-  });
+//     var {to,claimer,date} = tos;
+//     to =  to instanceof Node   ? to.id
+//         : to.j                 ? {j:String(to.j)}
+//         // : to.s                 ? to
+//         // : to.n                 ? to
+//         :                        to;
+//     return {to,claimer:claimer.id,date};
+//   });
 
-  // var claims = _.mapValues(node.typeTos,({to,claimer,date})=>
-  //     to instanceof Node   ? {to:  to.id            ,claimer:claimer.id,date}
-  //   : to.j                 ? {to:  {j:String(to.j)} ,claimer:claimer.id,date}
-  //   : to.s                 ? {to:  to               ,claimer:claimer.id,date}
-  //   : to.n                 ? {to:  to               ,claimer:claimer.id,date}
-  //   :                        ({set:_.mapValues(to,({claimer,date})=>({claimer:claimer.id,date}))}) );
-  var json = {id,claims};
-  // if(includeFroms) json.fromClaims = _.mapValues(node.typeFroms,from_=>from_.id);
-  if(includeFroms) json.fromClaims = _.mapValues(node.typeFroms,({from,claimer,date})=>
-    ({from:from.id,claimer:claimer.id,date}) );
-  return json;
-}
+//   // var claims = _.mapValues(node.typeTos,({to,claimer,date})=>
+//   //     to instanceof Node   ? {to:  to.id            ,claimer:claimer.id,date}
+//   //   : to.j                 ? {to:  {j:String(to.j)} ,claimer:claimer.id,date}
+//   //   : to.s                 ? {to:  to               ,claimer:claimer.id,date}
+//   //   : to.n                 ? {to:  to               ,claimer:claimer.id,date}
+//   //   :                        ({set:_.mapValues(to,({claimer,date})=>({claimer:claimer.id,date}))}) );
+//   var json = {id,claims};
+//   // if(includeFroms) json.fromClaims = _.mapValues(node.typeFroms,from_=>from_.id);
+//   if(includeFroms) json.fromClaims = _.mapValues(node.typeFroms,({from,claimer,date})=>
+//     ({from:from.id,claimer:claimer.id,date}) );
+//   return json;
+// }
+
+
 
 app.get('/all', (req, res) =>
 {
-  var claimJsons = [];
-  var lastClaimJsons = {};
+  // TODO use the main ClaimStore
+  var claimStore = new ClaimStore();
   for(var fromId in _idToNodeIndex)
-  {
-    var node = _idToNodeIndex[fromId];
-    for(var typeId in node.typeTos)
-    {
-      var claims = node.typeTos[typeId];
-      for(var claim of claims)
-      {
-        var claimJson = claim.toCompactJson();
-        
-        if(claimJson.f == lastClaimJsons.f) delete claimJson.f;
-        else lastClaimJsons.f = claimJson.f;
-        if(claimJson.T == lastClaimJsons.T) delete claimJson.T;
-        else lastClaimJsons.T = claimJson.T;
-        if(_.isEqual(claimJson.t,lastClaimJsons.t)) delete claimJson.t;
-        else lastClaimJsons.t = claimJson.t;
-        if(claimJson.c == lastClaimJsons.c) delete claimJson.c;
-        else lastClaimJsons.c = claimJson.c;
-        if(claimJson.d == lastClaimJsons.d) delete claimJson.d;
-        else lastClaimJsons.d = claimJson.d;
-
-        claimJsons.push(claimJson);
-      }
-    }
-  }
-  res.send({claims:claimJsons});
+    claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
+  res.send({compactJson:claimStore.toCompactJson()});
 
   // res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
 });
@@ -1327,16 +1382,18 @@ wss.on('connection', function connection(ws)
 {
   ws.on('message', async function incoming(message)
   {
-    var json = JSON.parse(message);
-    var response = {requestId:json.requestId,data:[]};
-    console.log("on client message",json);
+    var message = JSON.parse(message);
+    if(!message.claims) message.claims = [];
+    var response = {requestId:message.requestId,data:[]};
+    console.log("on client message",message.request);
+    if(message.claims) importClaims(message.claims);
 // {descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]}
-    if(json.request == "makeYouTubeVideo")
-    {
-      var video = await $$('YoutubeVideo','instanciable.make')(json.vid);
-      response.data.push(nodeToJson(video,true));
-      response.videoId = video.id;
-    }
+    // if(message.request == "makeYouTubeVideo")
+    // {
+    //   var video = await $$('YoutubeVideo','instanciable.make')(message.vid);
+    //   response.data.push(nodeToJson(video,true));
+    //   response.videoId = video.id;
+    // }
 
     ws.send(JSON.stringify(response));
   });
