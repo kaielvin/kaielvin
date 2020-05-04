@@ -179,8 +179,7 @@ if(!loadingFromDisk)
 
   $$('person (instanciable)');
   $$('string person.title');
-  var KaiElvin = $$('kaielvin').$(_instanceOf,'person').$('title',{s:'Kai Elvin'});
-  Node.defaultUser = KaiElvin;
+  $$('kaielvin').$(_instanceOf,'person').$('title',{s:'Kai Elvin'});
 
   // $$('claimType > typeFromOne > object');
   $$('instanciable claimType.typeFrom');
@@ -770,58 +769,6 @@ if(!loadingFromDisk)
 
 
 
-  async function YouTubeHtmlFetch(cacheFolderName,url,id,jsonVariable)
-  {
-    var cachePath = './cache/'+cacheFolderName+'/'+id+'.json';
-    if(fs.existsSync(cachePath)) return JSON.parse(await fss.readFile(cachePath));
-
-    console.log("YouTubeHtmlFetch()",'url',url,'…');
-    var path = 'https://cors-anywhere.herokuapp.com/'+url;
-    // var path = url;
-
-    var fetched = await fetch(path,{headers:{
-        "X-Requested-With":"Chrome",
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36",
-      }});
-
-    var text = await fetched.text();
-    var startStr = 'window["'+jsonVariable+'"] = ';
-    var start = text.indexOf(startStr);
-    if(start == -1) throw new Error('no json information found, path='+path+', returned: '+text);
-    start+= startStr.length;
-    var stop = text.indexOf(";\n",start);
-    if(stop == -1) throw new Error('no json information found, path='+path+', returned: '+text);
-
-    // var match = text.match(/window\[\"ytInitialPlayerResponse\"\] = (.*)/);
-    // if(!match) await fss.writeFile(cachePath+'.error.html',text,'utf8');
-    // if(!match) throw new Error('no json information found, path='+path+', returned: '+text);
-
-    var json = text.substring(start,stop);
-    json = JSON.parse(json);
-
-
-    // console.log('FOUND',json);
-    // console.log('FOUND',JSON.stringify(json,null,'    '));
-
-    var result = {};
-    result.fetchDate = new Date();
-    result.sourceHtml = text;
-    result.extractedJson = json;
-
-    await fss.writeFile(cachePath,JSON.stringify(result),'utf8');
-    return result;
-  }
-  ServerContext.cachedFetch_YoutubeVideo2 = async vid=>
-  {
-    return await YouTubeHtmlFetch('youtube_video_fromHtml','https://www.youtube.com/watch?v='+vid,vid,'ytInitialPlayerResponse');
-  }
-  ServerContext.cachedFetch_YoutubePlaylist2 = async pid=>
-  {
-    return await YouTubeHtmlFetch('youtube_playlist_fromHtml','https://www.youtube.com/playlist?list='+pid,pid,'ytInitialData');
-  }
-
-
 
   $$('YoutubeVideo','instanciable.make',async (vid,skipFetch=false)=>
   {
@@ -904,49 +851,8 @@ if(!loadingFromDisk)
   });
 
 
-  var makeYouTubeVideoFromPlaylistDataAndByFetching_Pool = new Promises.WorkerPool(25)
-    .setWorker(async vid=> await $$('YoutubeVideo','instanciable.make')(vid) );
-
-  ServerContext.cachedFetch_YoutubePlaylistVideos = async pid=>
-  {
-    var {extractedJson} = await ServerContext.cachedFetch_YoutubePlaylist2(pid);
-    // yeah, that's one long dive:
-    var vids = extractedJson.contents
-      .twoColumnBrowseResultsRenderer
-      .tabs[0].tabRenderer.content
-      .sectionListRenderer.contents[0]
-      .itemSectionRenderer.contents[0]
-      .playlistVideoListRenderer.contents
-      .map(obj=>obj.playlistVideoRenderer.videoId);
-
-    var videosPromises = [];
-    for(var vid of vids)
-    {
-        await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
-        videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid));
-    }
-    var videos = await Promise.all(videosPromises);
-    // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length);
-    videos = videos.filter(video=>
-    {
-      if(!video.error) return true;
-      console.error("Failed loading video "+video.item,video.error);
-      return false;
-    })
-    // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length,'.');
-    return videos;
-  }
-
-
 
   $$('string YoutubeChannel.title');
-  ServerContext.makeYoutubeChannel = (cid,title)=>
-  {
-    var channel = stridToNode(cid);
-    if(channel) return channel;
-    channel = $$(cid).$('instanceOf','YoutubeChannel').$('title',{s:title});
-    return channel;
-  }
 
   $$('string YoutubeVideo.title');
   $$('string YoutubeVideo.description');
@@ -1160,9 +1066,6 @@ if(!loadingFromDisk)
 
 
 
-
-
-
   // https://www.youtube.com/oembed?format=json&amp;url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DnnVq6gmatHU
   // https://www.googleapis.com/youtube/v3/videos?id=nnVq6gmatHU&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&part=snippet,contentDetails,statistics,status
   //https://www.youtube.com/embed/HIbAz29L-FA?modestbranding=1&playsinline=0&showinfo=0&enablejsapi=1&origin=https%3A%2F%2Fintercoin.org&widgetid=1
@@ -1200,7 +1103,6 @@ if(!loadingFromDisk)
     // $$('YoutubeThumbnailResolutions').$ex('push',item);
   });
 }
-
 
 
 
@@ -1348,7 +1250,12 @@ app.get('/all', (req, res) =>
   // TODO use the main ClaimStore
   var claimStore = new ClaimStore();
   for(var fromId in _idToNodeIndex)
+  {
+    var instanciable = $$(fromId).$('instanceOf');
+    if(instanciable && (instanciable == $$('YoutubeVideo') || instanciable == $$('watching')))
+      continue;
     claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
+  }
   res.send({compactJson:claimStore.toCompactJson()});
 
   // res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
@@ -1383,10 +1290,35 @@ wss.on('connection', function connection(ws)
   ws.on('message', async function incoming(message)
   {
     var message = JSON.parse(message);
-    if(!message.claims) message.claims = [];
-    var response = {requestId:message.requestId,data:[]};
     console.log("on client message",message.request);
+    var response = {requestId:message.requestId,data:[]};
+    var responseClaimsStore = new ClaimStore();
     if(message.claims) importClaims(message.claims);
+
+    if(message.request == 'fetchCollection')
+    {
+      var {collection,skip,limit,localIds} = message;
+      collection = $$(collection);
+      if(skip.from) skip.from = Node.makeById(skip.from);
+      var {objects,totalCount} = collection.$ex('resolve',skip,limit,true,localIds);
+
+      var excludeIdsSet = localIds ? _.keyBy(localIds) : {};
+      objects.forEach(result=>
+      {
+        if(!excludeIdsSet[result.id]) responseClaimsStore.addAllNodeClaims(result,false);
+      });
+      response.results = objects.map(result=>result.id);
+      response.totalCount = totalCount;
+
+      console.log("wss.fetchCollection",skip.from ? skip.from.id : skip,limit,localIds.length,response.results.length,response.totalCount);
+    }
+    if(message.request == 'fetchNodesById')
+    {
+      var {nodeIds} = message;
+      nodeIds.forEach(nodeId=>
+        responseClaimsStore.addAllNodeClaims(Node.makeById(nodeId),false));
+    }
+
 // {descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]}
     // if(message.request == "makeYouTubeVideo")
     // {
@@ -1395,7 +1327,256 @@ wss.on('connection', function connection(ws)
     //   response.videoId = video.id;
     // }
 
+    if(responseClaimsStore.length > 0)
+      response.claims = responseClaimsStore.toCompactJson();
+
     ws.send(JSON.stringify(response));
   });
 
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+var makeYouTubeVideoFromPlaylistDataAndByFetching_Pool = new Promises.WorkerPool(25)
+  .setWorker(async vid=> await $$('YoutubeVideo','instanciable.make')(vid,false,true) ); // {alreadyExisted,node}
+
+ServerContext.cachedFetch_YoutubePlaylistVideos = async pid=>
+{
+  var {extractedJson} = await ServerContext.cachedFetch_YoutubePlaylist2(pid);
+  // yeah, that's one long dive:
+  var vids = extractedJson.contents
+    .twoColumnBrowseResultsRenderer
+    .tabs[0].tabRenderer.content
+    .sectionListRenderer.contents[0]
+    .itemSectionRenderer.contents[0]
+    .playlistVideoListRenderer.contents
+    .map(obj=>obj.playlistVideoRenderer.videoId);
+
+  var videosPromises = [];
+  for(var vid of vids)
+  {
+      await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
+      videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid));
+  }
+  var videos = await Promise.all(videosPromises);
+  // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length);
+  videos = videos.filter(video=>
+  {
+    if(video.alreadyExisted) return false;
+    if(!video.error) return true;
+    console.error("Failed loading video "+video.item,video.error);
+    return false;
+  }).map(({node})=>node); // TODO check these changes…
+  // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length,'.');
+  return videos;
+}
+
+
+
+ServerContext.makeYoutubeChannel = (cid,title)=>
+{
+  var channel = stridToNode(cid);
+  if(channel) return channel;
+  channel = makeNode(cid).$('instanceOf','YoutubeChannel').$('title',{s:title});
+  return channel;
+}
+
+
+var bannedFromYoutube = false;
+async function YouTubeHtmlFetch(cacheFolderName,url,id,jsonVariable)
+{
+  var cachePath = './cache/'+cacheFolderName+'/'+id+'.json';
+  if(fs.existsSync(cachePath)) return JSON.parse(await fss.readFile(cachePath));
+
+  if(bannedFromYoutube) throw new Error("banned from YouTube.");
+
+  console.log("YouTubeHtmlFetch()",'url',url,'…');
+  // var path = 'https://cors-anywhere.herokuapp.com/'+url;
+  // var path = 'http://35.180.160.234:4371/'+url;
+  var path = 'http://35.180.55.192:4371/'+url;
+  // var path = url;
+
+  var fetched = await fetch(path,{headers:{
+      "X-Requested-With":"Chrome",
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+      "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36",
+    }});
+
+  var text = await fetched.text();
+  var startStr = 'window["'+jsonVariable+'"] = ';
+  var start = text.indexOf(startStr);
+  var noStart = start == -1;
+  start+= startStr.length;
+  var stop = text.indexOf(";\n",start);
+  if(noStart || stop == -1)
+  {
+    if(text.includes("<p class='largeText'>Sorry for the interruption. We have been receiving a large volume of requests from your network.</p>"))
+    {
+      text = "Sorry for the interruption. We have been receiving a large volume of requests from your network.";
+      bannedFromYoutube = true;
+    }
+    if(text.includes("Our systems have detected unusual traffic from your computer network.  This page checks to see if it&#39;s really you sending the requests, and not a robot."))
+    {
+      text = "Our systems have detected unusual traffic from your computer network.";
+      bannedFromYoutube = true;
+    }
+
+    throw new Error('no json information found, path='+path+', returned: '+text);
+  }
+
+  // var match = text.match(/window\[\"ytInitialPlayerResponse\"\] = (.*)/);
+  // if(!match) await fss.writeFile(cachePath+'.error.html',text,'utf8');
+  // if(!match) throw new Error('no json information found, path='+path+', returned: '+text);
+
+  var json = text.substring(start,stop);
+  json = JSON.parse(json);
+
+
+  // console.log('FOUND',json);
+  // console.log('FOUND',JSON.stringify(json,null,'    '));
+
+  var result = {};
+  result.fetchDate = new Date();
+  result.sourceHtml = text;
+  result.extractedJson = json;
+
+  await fss.writeFile(cachePath,JSON.stringify(result),'utf8');
+  return result;
+}
+ServerContext.cachedFetch_YoutubeVideo2 = async vid=>
+{
+  return await YouTubeHtmlFetch('youtube_video_fromHtml','https://www.youtube.com/watch?v='+vid,vid,'ytInitialPlayerResponse');
+}
+ServerContext.cachedFetch_YoutubePlaylist2 = async pid=>
+{
+  return await YouTubeHtmlFetch('youtube_playlist_fromHtml','https://www.youtube.com/playlist?list='+pid,pid,'ytInitialData');
+}
+
+
+ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
+{
+  console.log("ServerContext.fetchFromKaielvin_watchYoutubeVideos()");
+  var fetched = await fetch("https://kaielvin.org/watchedYoutubeVideos");
+  var json = await fetched.json();
+  console.log("ServerContext.fetchFromKaielvin_watchYoutubeVideos()","json.length",json.length);
+  var lastDate = 9999999999999;
+
+  var uniqueVids = {};
+  json = json.filter(({date,vid})=>
+  {
+    date = new Date(date);
+    var delta = lastDate - date.valueOf();
+    lastDate = date.valueOf();
+    // if(delta < 15000) console.log(date,vid,"delta",Math.round(delta/100)/10+" sec");
+    if(delta < 15000) return false;
+    uniqueVids[vid] = true;
+    return true;
+  });
+
+  console.log("ServerContext.fetchFromKaielvin_watchYoutubeVideos()","_.size(uniqueVids)",_.size(uniqueVids));
+
+
+
+  // var videosWithDate = [];
+  // // json = json.slice(0,50000);
+  // json.forEach(({date,vid})=>
+  // {
+  //   var video = stridToNode(vid);
+  //   if(!video) return; // adding only watchings of videos in the db in this version
+  //   videosWithDate.push({video,date:new Date(date)});
+  // });
+
+
+  var videoPromisesWithDate = [];
+
+  // json = json.slice(0,5000000);
+  for(var {date,vid} of json)
+  // json.forEach(({date,vid})=>
+  {
+    date = new Date(date);
+    console.log(date.toGMTString(),vid);
+    if(bannedFromYoutube) break;
+    await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
+    // videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid));
+    videoPromisesWithDate.push({promise:makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid),date});
+  }
+  // });
+
+  var videosWithDate = [];
+  for(var {promise,date} of videoPromisesWithDate)
+    videosWithDate.push({video:await promise,date});
+
+  videosWithDate = videosWithDate.filter(({video,date})=>
+  {
+    if(!video.error) return true;
+    console.error("Failed loading video "+video.item,video.error);
+    return false;
+  }).map(({video,date})=>({video:video.node,date}));
+
+  return videosWithDate;
+}
+
+if(true) (async ()=>
+{
+
+    var _kaielvin = $$('kaielvin');
+    var _watching = $$('watching');
+    var _watchingPerson = $$('watching.person');
+    var _watchingVideo = $$('watching.video');
+    var _watchingDate = $$('watching.date');
+
+    (await ServerContext.fetchFromKaielvin_watchYoutubeVideos())
+      .forEach(({video,date})=>
+    {
+      console.log("makeUnique()",JSON.stringify([
+        ['object.instanceOf','watching'],
+        ['watching.person','kaielvin'],
+        ['watching.video',video.strid],
+        ['watching.date',date.valueOf()],
+      ]));
+      makeUnique([
+        [_instanceOf,_watching],
+        [_watchingPerson,_kaielvin],
+        [_watchingVideo,video],
+        [_watchingDate,date.valueOf()],
+      ]);
+      // makeUnique([
+      //   [_instanceOf,'watching'],
+      //   ['watching.person','kaielvin'],
+      //   ['watching.video',video],
+      //   ['watching.date',date.valueOf()],
+      // ]);
+      // $$()
+      //   .$(_instanceOf,'watching')
+      //   .$('person','kaielvin')
+      //   .$('video',video)
+      //   .$('date',date.valueOf());
+    });
+    
+})();

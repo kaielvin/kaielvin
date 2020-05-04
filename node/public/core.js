@@ -59,6 +59,7 @@ var randHex = function(len=8) {
 var valueToString = value=>
        !value                 ? 'undefined'
       : value instanceof Node ? value.name
+      : value.u               ? 'unset'
       : value.s               ? 's_'+value.s
       // : value.b               ? 'b_'+value.b
       : value.n               ? 'n_'+value.n
@@ -72,7 +73,8 @@ var fulltextSearch = new MiniSearch({
   fields: ['strid', 'title', 'instanciable', 'description'], // fields to index for full-text search
   storeFields: ['id'], // fields to return with search results
   searchOptions: {
-    boost: { strid: 10, title: 8, instanciable: 2, description: 1 },
+    // boost: { strid: 10, title: 8, instanciable: 2, description: 1 },
+    boost: { strid: 100, title: 10, instanciable: 5, description: 1 },
     prefix: true,
     fuzzy: 0.2,
   }
@@ -89,22 +91,22 @@ var nodeTofullTextDocument = node=>
   doc.description = node.$('description');
   if(doc.strid && !_.isString(doc.strid))
   {
-    console.error("nodeTofullTextDocument()doc.strid && !_.isString(doc.strid)",JSON.stringify(doc.strid));
+    console.error("nodeTofullTextDocument()",node.id,"doc.strid && !_.isString(doc.strid)",JSON.stringify(doc.strid));
     return null;
   }
   if(doc.title && !_.isString(doc.title))
   {
-    console.error("nodeTofullTextDocument()doc.title && !_.isString(doc.title)",JSON.stringify(doc.title));
+    console.error("nodeTofullTextDocument()",node.id,"doc.title && !_.isString(doc.title)",JSON.stringify(doc.title));
     return null;
   }
   if(doc.instanciable && !_.isString(doc.instanciable))
   {
-    console.error("nodeTofullTextDocument()doc.instanciable && !_.isString(doc.instanciable)",JSON.stringify(doc.instanciable));
+    console.error("nodeTofullTextDocument()",node.id,"doc.instanciable && !_.isString(doc.instanciable)",JSON.stringify(doc.instanciable));
     return null;
   }
   if(doc.description && !_.isString(doc.description))
   {
-    console.error("nodeTofullTextDocument()doc.description && !_.isString(doc.description)",JSON.stringify(doc.description));
+    console.error("nodeTofullTextDocument()",node.id,"doc.description && !_.isString(doc.description)",JSON.stringify(doc.description));
     return null;
   }
   return doc;
@@ -126,7 +128,7 @@ var willUpdateFullTextIndexForNode = node=>
   }
   ,500);
 
-  nodesToFullTextIndex[id]();
+  // nodesToFullTextIndex[id]();
 }
 
 
@@ -293,7 +295,8 @@ class Node
     // if(claims.length > 1 && claims[0].to && claims[0].to.s)
     //   console.log("getFromType_to() claims.length > 1",this.name,'>',type.name,'>',
     //     claims.map(claim=>claim.to && claim.to.s).join(' — '));
-    return _.maxBy(claims,c=>c.date.valueOf()).to;
+    var to = _.maxBy(claims,c=>c.date.valueOf()).to;
+    return to.u ? undefined : to;
     // return _.last(claim).to;
     // if(!(this.typeTos[type.id] instanceof Claim))
     //   for(var key in claim)
@@ -372,7 +375,30 @@ class Node
       console.error("$ex",method.name,e);
     }
   }
+  // useful instead of $ex only to catch errors automatically
+  async $exAsync(method,...args)
+  {
+    method = strToType(method,this);
+    var jsMethod = method.getFromType_to(_resolve);
+    // console.log("$ex",String(jsMethod.j))
+    if(!(jsMethod instanceof Object)) return undefined;
+    if(!jsMethod.j) return undefined;
+    try
+    {
+      return await jsMethod.j.call(this,...args);
+    }
+    catch(e)
+    {
+      console.error("$exAsync",method.name,e);
+    }
+  }
+
+  toString()
+  {
+    return this.id+': '+this.$('prettyString');
+  }
 }
+
 Node.makeById = id=> _idToNodeIndex[id] || new Node(id);
 
 var _stridClaims = {};
@@ -640,6 +666,7 @@ function $$(i1,i2,i3,i4)
 var valueToHtml = value=>
   value instanceof Node ? $$(value,'object.link')
       : value === undefined ? 'undefined'
+      : value.u ? 'undefined'
       : value.n ? ''+value.n
       // : value.b ? (value.b?'true':'false')
       : value.s ? '"'+value.s+'"'
@@ -655,7 +682,12 @@ function makeUnique(typeTos)
   // perform intersection of all the sets of (to,type)->froms
   // typeTos.forEach(([type,to])=>
   //   console.log('makeUnique()',$$(type,'object.prettyString'),$$(to,'object.prettyString'),$$(to).getToType_froms($$(type)).map( from=> $$(from,'object.prettyString') ) ) );
-  var fromss = typeTos.map(([type,to])=>$$(to).getToType_froms($$(type)));
+  
+  var [nodeTypeTos,valueTypeTos] = _.partition(typeTos, ([T,t])=> _.isString(t) || t instanceof Node);
+
+  if(nodeTypeTos.length == 0) throw new Error("makeUnique() needs at least one value as node (other types are not indexed)");
+
+  var fromss = nodeTypeTos.map(([type,to])=>$$(to).getToType_froms($$(type)));
   fromss = _.sortBy(fromss,froms=>froms.length);
   // console.log('makeUnique()',fromss.map(froms=>froms.map( from=> $$(from,'object.prettyString') )));
   var uniques = fromss[0];
@@ -664,6 +696,11 @@ function makeUnique(typeTos)
     uniques = _.intersection(uniques,fromss[i]);
     // console.log('makeUnique()','uniques.length',uniques.length);
   }
+
+  valueTypeTos.forEach(([T,t])=>
+  {
+    uniques = uniques.filter(f=> f.$(T) == t);
+  });
 
     // console.log('makeUnique()','uniques.length',uniques.length,uniques.length&&$$(uniques[0],'object.prettyString'));
   // one or more found

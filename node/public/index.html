@@ -21,6 +21,7 @@ body
   background: black;
   color: #bbb;
   font-family: Roboto, Arial, sans-serif;
+  margin: 0;
 }
 input
 {
@@ -49,6 +50,40 @@ h1 small
 {
   text-decoration: underline;
 }*/
+
+
+  ::-webkit-scrollbar {
+    width: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background:  #ffffff22; 
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background:  #ffffff44; 
+    border-radius: 5px;
+  }
+
+
+
+#app
+{
+  display: flex;
+  flex-direction: row;
+}
+#app > .left
+{
+  flex: 8;
+  padding: 8px;
+}
+#app > .right
+{
+  flex: 2;
+  border-left: solid 3px #222;
+  padding: 8px;
+  display: none;
+}
+
 #selectedDescriptor
 {
   margin-top: 3em;
@@ -101,7 +136,7 @@ h1 small
   font-weight: bold;
   margin-bottom: calc(var(--youtube-row-unit)/4);
 }
-.rowView .tags, .rowView .subtitle
+.rowView .tags, .rowView .subtitle, .rowView .watching
 {
   font-size: 0.8em;
 }
@@ -150,8 +185,59 @@ h1 small
 
 
 
+@keyframes fadeOut {
+    from {opacity: 1;}
+    to {opacity: 0;display:none;}
+}
+#toastMessage
+{
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  /*height: 1em;*/
+  background: #222;
+  /*animation: fadeOut 1s forwards;*/
+  padding: 1em;
+  text-align: center;
+  opacity: 0;
+}
+#toastMessage.showing
+{  
+  transition: all 0.1s linear;
+  opacity: 1;
+}
+#toastMessage.hidding
+{  
+  transition: all 0.3s linear;
+  opacity: 0;
+}
+#toastMessage.hidden
+{  
+  display: none; 
+}
+
+.collection-items > div
+{
+  display: flex;
+  flex-direction: row;
+}
+.collection-items > div > .shortcut
+{
+  width: 2em;
+  font-size: 0.7em;
+  color: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center; 
+}
+
+
+
+
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" type="text/javascript"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.25.0/moment.min.js" type="text/javascript"></script>
         <script src="https://cdn.jsdelivr.net/npm/minisearch@2.2.0/dist/umd/index.min.js"></script>
         <script src="https://unpkg.com/idb@5.0.2/build/iife/index-min.js"></script>
         <script>var require=()=>{};var module={};</script>
@@ -160,17 +246,23 @@ h1 small
     <body>
 
 <div id="app">
-    <div id="header">
-      <a href="#kaisHome">[h]</a>
-      <span class="link" onclick="bookmarkThis()">[b]</span>
-      <div>
-        <form onsubmit="onHeaderSearch()"><input type="text" id="headerSearch" oninput="onHeaderSearchChanged()" autocomplete="off" /></form>
-        <div id="searchResults"><div id="searchResultsContainer"></div></div>
+    <div class="left">
+      <div id="header">
+        <a href="#kaisHome">[h]</a>
+        <span class="link" onclick="addToClipboard()">[b]</span>
+        <div>
+          <form onsubmit="onHeaderSearch()"><input type="text" id="headerSearch" oninput="onHeaderSearchChanged()" autocomplete="off" /></form>
+          <div id="searchResults"><div id="searchResultsContainer"></div></div>
+        </div>
       </div>
+      <div id="content"></div>
+      <div id="selectedDescriptor"></div>
+      <textarea id="codeEditor"></textarea>
     </div>
-    <div id="content"></div>
-    <div id="selectedDescriptor"></div>
-    <textarea id="codeEditor"></textarea>
+    <div class="right">
+      <div id="sideContent"></div>
+  </div>
+  <div id="toastMessage" class="hidden"></div>
 </div>
 
 <script>
@@ -204,7 +296,22 @@ function htmlToElement(html) {
 
 
 
-
+var toastMessageEl = document.getElementById('toastMessage');
+var showToast = async(content)=>
+{
+  console.log("showToast()",content);
+  toastMessageEl.innerHTML = content;
+  toastMessageEl.classList.remove('hidden');
+  await wait(0);
+  toastMessageEl.classList.add('showing');
+  await wait(2000);
+  toastMessageEl.classList.add('hidding');
+  await wait(302);
+  toastMessageEl.classList.add('hidden');
+  await wait(0);
+  toastMessageEl.classList.remove('hidding');
+  toastMessageEl.classList.remove('showing');
+}
 
 
 
@@ -229,7 +336,7 @@ function reportPersistedNow()
   console.log("reportPersistedNow()","persisted",persistedCount,"claims");
   persistedCount = 0;
 }
-var reportPersistedDebounced = _.throttle(reportPersistedNow,2000);
+var reportPersistedDebounced = _.throttle(reportPersistedNow,5000);
 function reportPersisted()
 {
   persistedCount++;
@@ -289,24 +396,45 @@ async function importData(jsonPath)
 
 
 var loggedUser;
-
-const socket = new WebSocket('ws://localhost:8080');
-
-// Connection opened
-socket.addEventListener('open', function (event)
-{
-});
-
+var socket;
 var _wsRequestPromises = {};
-socket.addEventListener('message', function (event)
+var connectToWebsocket = ()=>
 {
-  console.log('Message from server ', event.data);
-  var json = JSON.parse(event.data);
-  _wsRequestPromises[json.requestId].resolve(json);
-});
+  socket = new WebSocket('ws://localhost:8080');
+  // Connection opened
+  socket.addEventListener('open', function (event)
+  {
+  });
+  socket.addEventListener('close', async function (event)
+  {
+    // alert("WebSocket closed.");
+    await wait(1000);
+    connectToWebsocket();
+  });
+
+  socket.addEventListener('message', function (event)
+  {
+    // console.log('Message from server ', event.data);
+    var json = JSON.parse(event.data);
+    _wsRequestPromises[json.requestId].resolve(json);
+  });
+}
+connectToWebsocket();
+
 
 async function wsFetch(request)
 {
+  if(_claimsToServerStore)
+  {
+    _sendClaimsToServerDebounced.cancel();
+    if(!request.claims)
+    {
+      var claimsRequest = _sendClaimsToServerNow(true);
+      request.claims = claimsRequest.claims;
+    }
+    else _sendClaimsToServerNow();
+  }
+
   request.requestId = randHex();
   var promise = resolvablePromise();
   _wsRequestPromises[request.requestId] = promise;
@@ -322,23 +450,75 @@ async function wsFetch(request)
 
 
 
-var claimsToServerStore;
-function sendClaimsToServerNow()
+var _claimsToServerStore;
+function _sendClaimsToServerNow(_getRequestNotSent=false)
 {
-  console.log("sendClaimsToServerNow()","claim count",claimsToServerStore.length);
-  var compactJson = claimsToServerStore.toCompactJson();
-  claimsToServerStore = null;
-  wsFetch({claims:compactJson}); // ignore the answer, assumes it went through
+  console.log("sendClaimsToServerNow()","claim count",_claimsToServerStore.length);
+  var compactJson = _claimsToServerStore.toCompactJson();
+  _claimsToServerStore = null;
+  var request = {claims:compactJson};
+  if(_getRequestNotSent) return request;
+  wsFetch(request); // ignore the answer, assumes it went through
 }
-sendClaimsToServerDebounced = _.debounce(sendClaimsToServerNow,500,{maxWait:3000});
+_sendClaimsToServerDebounced = _.debounce(_sendClaimsToServerNow,500,{maxWait:3000});
 
 function sendClaimToServer(claim)
 {
-  if(!claimsToServerStore) claimsToServerStore = new ClaimStore();
-  claimsToServerStore.addClaim(claim);
-  sendClaimsToServerDebounced();
+  if(!_claimsToServerStore) _claimsToServerStore = new ClaimStore();
+  _claimsToServerStore.addClaim(claim);
+  _sendClaimsToServerDebounced();
 }
 
+
+async function fectchComplementaryNodesFromServer(nodes)
+{
+  var unknownNodes = [];
+  nodes.forEach(node=>
+  {
+    var types = node.getFrom_types();
+    types.forEach(type=>
+    {
+      if(!type.$(_instanceOf)) unknownNodes.push(type);
+      node.typeTos[type.id].forEach(claim=>
+      {
+        var to = claim.to;
+        if(to instanceof Node && !to.$(_instanceOf)) unknownNodes.push(to);
+      });
+    });
+  });
+  if(unknownNodes.length > 0) console.log("fectchComplementaryNodesFromServer() …",'count',nodes.length,'unknownCount',unknownNodes.length);
+  if(unknownNodes.length > 0) await fetchNodesFromServer(unknownNodes);
+}
+
+async function fetchNodesFromServer(nodes)
+{
+  await wsFetch({request:"fetchNodesById",nodeIds:nodes.map(n=>n.id)});
+  console.log("fetchNodesByIdFromServer() done. Nodes: ",nodes.map(n=>n.$('prettyString')));
+  await fectchComplementaryNodesFromServer(nodes);
+}
+
+// async function fetchCollectionFromServer(collection,skip=0,limit=10)
+// {
+//   var {results,totalCount} = await wsFetch({request:"fetchCollection",collection:$$(collection).id,skip,limit});
+//   results = results.map(id=>Node.makeById(id));
+//   await fectchComplementaryNodesFromServer(results);
+//   return {results,totalCount};
+// }
+
+
+async function serverFetchCollection(collection,skip=0,limit=10,localIds=[])
+{
+  console.log("serverFetchCollection()",skip.from ? 'from: '+skip.from.$('prettyString') : skip,limit);
+
+  // TODO make sure that the server has skip.from (send proactively if in doubt, just in case,
+  // or if unlikely, leave it ask for it if needed).
+  if(skip.from) skip.from = skip.from.id;
+  // results contains only nodes not in localIds
+  var {results,totalCount} = await wsFetch({request:"fetchCollection",collection:$$(collection).id,skip,limit,localIds});
+  results = results.map(id=>Node.makeById(id));
+  await fectchComplementaryNodesFromServer(results);
+  return {results,totalCount};
+}
 
 
 
@@ -365,7 +545,7 @@ async function onHeaderSearch()
     var vid = youtubeVideoUrlMatch[1];
     // var response = await wsFetch({multiple:false,descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]});
     var response = await wsFetch({request:"makeYouTubeVideo",vid});
-    showObject(response.videoId);
+    goToObject(response.videoId);
   }
   document.getElementById('headerSearch').value = '';
 }
@@ -406,20 +586,22 @@ function clearHeaderSearch()
 
 
 
-
+// const CollectionShortcuts = "0123456789abcdefghijklmnopqrstuvwxyz";
 document.addEventListener('keydown', (e) => {
   
+  var c = e.ctrlKey;
+  var s = e.shiftKey;
   // console.log("keydown",e.key,e.ctrlKey);
   if(myCodeMirror.hasFocus())
   {
-    if(e.key == 'Escape')
+    if(!c&&!s&& e.key == 'Escape')
     {
       console.log("escaping editor…","myCodeMirrorUnsaved",myCodeMirrorUnsaved);
       if(!myCodeMirrorUnsaved || confirm("There are unsaved change. Exit editor anyway?"))
         myCodeMirrorElStyle.visibility = "hidden";
       return e.preventDefault();
     }
-    if((e.key == 's' || e.key == 't') && e.ctrlKey)
+    if( c&&!s&& (e.key == 's' || e.key == 't'))
     {
       console.log("saving…");
       saveEditJs();
@@ -429,51 +611,100 @@ document.addEventListener('keydown', (e) => {
     }
   }
   else
+  if(searchInput !== document.activeElement)
   {
-    if(e.key == 'e' && e.ctrlKey)
+    if( c&& s&& e.key == 'e')
     {
       myCodeMirrorElStyle.visibility = "visible";
       return e.preventDefault();
     }
+
+
+    if(!c&&!s&& e.key == 'a')
+    {
+      window.history.back();
+      return e.preventDefault();
+    }
+    if(!c&&!s&& e.key == 'e')
+    {
+      window.history.forward();
+      return e.preventDefault();
+    }
+
+
+    // if(e.ctrlKey)
+    // {
+    //   var pos = CollectionShortcuts.indexOf(e.key);
+    //   var collection = document.getElementsByClassName('collection-items')[0];
+    //   console.log("shift+shortcut",e.key,pos,collection);
+    //   if(pos != -1 && collection)
+    //   {
+    //     var child = collection.children[pos]; // should search by data-shortcut attribute
+    //     console.log("shift+shortcut",pos,collection,child);
+    //     if(child)
+    //     {
+    //       var node = $$(child.dataset.node);
+    //       showObject(node);
+    //       return e.preventDefault();
+    //     }
+    //   }
+    // }
+
   }
 });
 
 
+
 document.addEventListener('keyup', (e) => {
   
+  var c = e.ctrlKey;
+  var s = e.shiftKey;
+
   // console.log("keyup",e.key,e.ctrlKey);
   if(myCodeMirror.hasFocus())
   {
     return;
   }
 
-  if(e.key == 'Escape')
+  if(!c&&!s&& e.key == 'Escape')
   {
     clearHeaderSearch();
   }
   if(searchInput !== document.activeElement)
   {
-    if(e.key == 'v')
+    if(!c&&!s&& e.key == 'v')
     {
       var defaultMethod = selectedNode.$ex('object.defaultPageView');
       if(selectedMethod != defaultMethod)
-        window.location.hash = selectedNode.name;
+        goToObject(selectedNode);
       else if(selectedMethod != 'simpleView')
-        window.location.hash = selectedNode.name+'/simpleView';
+        goToObject(selectedNode,'simpleView');
+        // window.location.hash = selectedNode.name+'/simpleView';
+      return e.preventDefault();
+    }
+    if(!c&&!s&& e.key == 'i')
+    {
+      var instanciable = selectedNode.$('instanceOf');
+      if(instanciable) goToObject(instanciable);
+      return e.preventDefault();
+    }
+    if(!c&&!s&& e.key == 'b')
+    {
+      addToClipboard();
       return e.preventDefault();
     }
 
-    if(e.key == 'c')
+    if(!c&&!s&& e.key == 'c')
     {
       if(selectedNode.$('instanceOf') == $$('collection'))
       {
         var mainContainingNode = selectedNode.$('mainContainingNode');
-        if(mainContainingNode) window.location.hash = mainContainingNode.name;
+        if(mainContainingNode) goToObject(mainContainingNode);
       }
       else
       {
         var collection = selectedNode.$('collection');
-        if(collection) window.location.hash = collection.name;
+        if(collection) goToObject(collection);
       }
       return e.preventDefault();
     }
@@ -494,23 +725,23 @@ document.addEventListener('keyup', (e) => {
         return link && link.href;
       });
 
-    if(e.key == '.')               location.hash = "kaisHome";
-    if(e.key == '0' && options[0]) window.location.href = options[0];
-    else if(e.key == '0')          location.hash = "kaisHome";
+    if(!c&&!s&& e.key == '.')               location.hash = "kaisHome";
+    if(!c&&!s&& e.key == '0' && options[0]) window.location.href = options[0];
+    // else if(e.key == '0')          location.hash = "kaisHome";
     // if(e.key == '0'              ) location.hash = "kaisHome";
     // if(e.key == '9' && options[0]) location.hash = options[0].substring(1);
     // if(e.key == '6' && options[1]) location.hash = options[1].substring(1);
     // if(e.key == '3' && options[2]) location.hash = options[2].substring(1);
-    if(e.key == '1' && options[1]) window.location.href = options[1];
-    if(e.key == '2' && options[2]) window.location.href = options[2];
-    if(e.key == '3' && options[3]) window.location.href = options[3];
+    if(!c&&!s&& e.key == '1' && options[1]) window.location.href = options[1];
+    if(!c&&!s&& e.key == '2' && options[2]) window.location.href = options[2];
+    if(!c&&!s&& e.key == '3' && options[3]) window.location.href = options[3];
   }
 });
 
 
 
 
-document.addEventListener("click", e=>
+document.addEventListener("click", async e=>
 {
   var aEl = findParent('a',e.target || e.srcElement);
   if (!aEl) return;
@@ -524,8 +755,7 @@ document.addEventListener("click", e=>
   if(!node) return;
   if(e.shiftKey)
   {
-    loggedUser.$('clipboard',node);
-    console.log(node.$('prettyString'),"added to the clipboard");
+    addToClipboard(node);
     e.preventDefault();
     e.stopPropagation();
     clearHeaderSearch();
@@ -547,9 +777,9 @@ document.addEventListener("click", e=>
           ['object.instanceOf','collection'],
           ['collection.descriptor',descriptor],
         ])
-      showObject(collection);
       e.preventDefault();
       e.stopPropagation();
+      goToObject(collection);
     }
     if(instanciable && instanciable == $$('YoutubeChannel'))
     {
@@ -562,9 +792,9 @@ document.addEventListener("click", e=>
           ['object.instanceOf','collection'],
           ['collection.descriptor',descriptor],
         ])
-      showObject(collection);
       e.preventDefault();
       e.stopPropagation();
+      goToObject(collection);
     }
   }
   console.log("clicked",url);
@@ -600,20 +830,99 @@ document.addEventListener("click", e=>
 
 
 
-
-
-
-
-
-function bookmarkThis ()
+var viewport = ()=>
 {
-  loggedUser.$('clipboard',selectedNode);
+  if(window.visualViewport) return window.visualViewport;
+  return {width:window.innerWidth,height:window.innerHeight};
+}
+
+window.onscroll = function()
+{
+  var contentBox = document.body.getBoundingClientRect()
+  var bottomPos = document.body.scrollTop+viewport().height;
+  // console.log(document.body.scrollTop,contentBox.height,viewport().height,bottomPos>contentBox.height-500);
+  if(bottomPos>contentBox.height-500 && !loadingPagination)
+    pageCollection();
+};
+
+
+
+
+function addToClipboard(node)
+{
+  if(!node) node = selectedNode;
+  loggedUser.$('clipboard',node);
+  showToast("clipboarded "+node.$('prettyString'));
+}
+
+var collectionPagingInfo;
+var loadingPagination = false;
+async function pageCollection()
+{
+  loadingPagination = true;
+  if(selectedInstanciable != $$('collection'))
+  {
+    collectionPagingInfo = undefined;
+    return;
+  }
+  var node = selectedNode;
+
+  if(!collectionPagingInfo || collectionPagingInfo.collection != node)
+    collectionPagingInfo = {collection:node,skip:0,count:0};
+  if(!collectionPagingInfo.reachedEnd)
+  {
+    var limit = 50;
+    var results = await node.$exAsync('fetch',collectionPagingInfo.skip,limit);
+    // results.forEach(r=>console.log("pageCollection() PAGING",r.id,r.$('prettyString')));
+
+    // TODO wait that the page is rendered
+    var collectionContainer = document.getElementsByClassName('collection-items')[0];
+    // console.log('pageCollection()',collectionContainer);
+    if(!collectionContainer) console.error("pageCollection()","collectionContainer not found on DOM.");
+    else results.forEach(r=>
+    {
+      console.log("pageCollection() adding to DOM: ",r.id,r.$('prettyString'));
+      collectionContainer.appendChild(htmlToElement(  r.$ex('rowView')  ));
+    });
+
+    collectionPagingInfo.count+= results.length;
+    if(results.length < limit) console.log("pageCollection() PAGING REACHED END")
+    if(results.length < limit) collectionPagingInfo.reachedEnd = true;
+    // if(results.length == 0) collectionPagingInfo.reachedEnd = true;
+    else collectionPagingInfo.skip = {from:_.last(results)};
+    // await showObject(selectedNode,false,true);
+  }
+
+  // if(!collectionPagingInfo || collectionPagingInfo.collection != node)
+  //   collectionPagingInfo = {collection:node};
+  // var c = collectionPagingInfo;
+  // if(c.serverTotalCount == undefined || c.serverSkip < c.serverTotalCount)
+  // {
+  //   var {totalCount,results} = await fetchCollectionFromServer(node,c.serverSkip,50);
+  //   c.serverTotalCount = totalCount;
+  //   c.serverSkip = (c.serverSkip || 0)+results.length;
+  //   console.log('pageCollection',results.map(r=>r.$('prettyString')),c);
+  //   // if(c.serverSkip < c.serverTotalCount)
+  //   await showObject(selectedNode,false,true);
+  // }
+  loadingPagination = false;
+}
+var goToObject = async (node,method=undefined)=>
+{
+  node = $$(node);
+  var hash = node.name;
+  var defaultMethod = node.$ex('object.defaultPageView');
+  if(!method) method = defaultMethod;
+  if(method != defaultMethod)
+    hash+= '/'+method;
+  location.hash = hash;
 }
 
 var _content = document.getElementById("content");
 var selectedNode = _instanciable;
+var selectedInstanciable = _instanciable;
 var selectedMethod;
-var showObject = async (node,updateHash=true)=>
+var showObject = async (node,updateHash=true,paginating=false)=>
 {
   clearHeaderSearch();
 
@@ -634,6 +943,8 @@ var showObject = async (node,updateHash=true)=>
   selectedNode = node;
   var hash = node.name;
   var instanciable = node.$('instanceOf');
+  selectedInstanciable = instanciable;
+
   // var defaultMethod = instanciable && instanciable.$('defaultPageView') || 'simpleView';
   // var defaultMethod2 = node.$('object.defaultPageView');
   var defaultMethod = node.$ex('object.defaultPageView');
@@ -654,8 +965,16 @@ var showObject = async (node,updateHash=true)=>
 
   // if(!method.includes('.')) method = '.'+method;
   // _content.appendChild(htmlToElement(  await Promise.resolve( $$(node,method) )  ));
+  document.title = node.$('prettyString')+(instanciable?' • '+instanciable.$('prettyString'):'')+' • Public';
   _content.appendChild(htmlToElement(  html  ));
-  window.scrollTo({top:0});
+  if(!paginating)
+  {
+    // should trigger pageCollection()
+    if(document.body.scrollTop != 0) window.scrollTo({top:0});
+    else pageCollection(node);
+  }
+  // await wait(0);
+  // if(!paginating) pageCollection(node);
 }
 
 var _selectedDescriptor = document.getElementById("selectedDescriptor");
@@ -715,7 +1034,7 @@ var createField = (type,instanciable)=>
     .$('claimType.typeFrom',instanciable)
     .$('claimType.typeTo',type);
   console.log("createField",type.$('prettyString'),instanciable.$('prettyString'));
-  showObject(claimtype);
+  goToObject(claimtype);
 }
 
 var saveEditJs = ()=>
@@ -736,7 +1055,7 @@ var saveEditJs = ()=>
 var createInDescriptor = descriptor=>
 {
   var instance = $$(descriptor,'descriptorFrom.instanciate');
-  showObject(instance);
+  goToObject(instance);
 }
 
 var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring(1) || "instanciable",false);
@@ -781,47 +1100,48 @@ var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring
 //   // console.log("json",json);
 // }
 
-async function fetchYoutubeData(vid='IK7nBOLYzdE')
-{
-  var path = 'https://cors-anywhere.herokuapp.com/https://www.youtube.com/watch?v='+vid;
-  var fetched = await fetch(path);
+// async function fetchYoutubeData(vid='IK7nBOLYzdE')
+// {
+//   var path = 'https://cors-anywhere.herokuapp.com/https://www.youtube.com/watch?v='+vid;
+//   var fetched = await fetch(path);
 
-  var text = await fetched.text();
-  var match = text.match(/window\[\"ytInitialPlayerResponse\"\] = (.*)/);
-  if(!match) throw new Error('no json information found');
+//   var text = await fetched.text();
+//   var match = text.match(/window\[\"ytInitialPlayerResponse\"\] = (.*)/);
+//   if(!match) throw new Error('no json information found');
 
-  var json = match[1];
-  json = json.substring(0,json.length-1); // removes end ';'
-  json = JSON.parse(json);
+//   var json = match[1];
+//   json = json.substring(0,json.length-1); // removes end ';'
+//   json = JSON.parse(json);
 
-  // console.log('FOUND',json);
-  // console.log('FOUND',JSON.stringify(json,null,'    '));
+//   // console.log('FOUND',json);
+//   // console.log('FOUND',JSON.stringify(json,null,'    '));
 
-  var videoDetails = json.videoDetails;
-  var microformat = json.microformat;
-  var playerMicroformatRenderer = microformat.playerMicroformatRenderer;
+//   var videoDetails = json.videoDetails;
+//   var microformat = json.microformat;
+//   var playerMicroformatRenderer = microformat.playerMicroformatRenderer;
 
-  var processedJson = {};
-  processedJson.fetchDate = new Date();
-  processedJson.title = videoDetails.title;
-  processedJson.lengthSeconds = Number(videoDetails.lengthSeconds);
-  processedJson.averageRating = videoDetails.averageRating;
-  processedJson.viewCount = Number(videoDetails.viewCount);
-  processedJson.publishDate = new Date(playerMicroformatRenderer.publishDate);
-  processedJson.uploadDate = new Date(playerMicroformatRenderer.uploadDate);
-  processedJson.description = playerMicroformatRenderer.description.simpleText;
-  processedJson.keywords = videoDetails.keywords;
-  processedJson.channelId = videoDetails.channelId;
-  processedJson.author = videoDetails.author;
-  processedJson.ownerChannelName = playerMicroformatRenderer.ownerChannelName;
+//   var processedJson = {};
+//   processedJson.fetchDate = new Date();
+//   processedJson.title = videoDetails.title;
+//   processedJson.lengthSeconds = Number(videoDetails.lengthSeconds);
+//   processedJson.averageRating = videoDetails.averageRating;
+//   processedJson.viewCount = Number(videoDetails.viewCount);
+//   processedJson.publishDate = new Date(playerMicroformatRenderer.publishDate);
+//   processedJson.uploadDate = new Date(playerMicroformatRenderer.uploadDate);
+//   processedJson.description = playerMicroformatRenderer.description.simpleText;
+//   processedJson.keywords = videoDetails.keywords;
+//   processedJson.channelId = videoDetails.channelId;
+//   processedJson.author = videoDetails.author;
+//   processedJson.ownerChannelName = playerMicroformatRenderer.ownerChannelName;
 
-  var result = {};
-  result.sourceHtml = text;
-  result.extractedJson = json;
-  result.processedJson = processedJson;
+//   var result = {};
+//   result.sourceHtml = text;
+//   result.extractedJson = json;
+//   result.processedJson = processedJson;
 
-  return result;
-}
+//   return result;
+// }
+
 
 
 (async ()=>
