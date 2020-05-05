@@ -1,5 +1,6 @@
 var _ = _ || require('lodash'); // already defined on the frontend version
 var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
+var fetch = fetch || require("node-fetch");
 
 // used by JS methods in the graph to access server specific values and functions
 var ServerContext = {};
@@ -69,7 +70,7 @@ var valueToString = value=>
 
 
 
-var fulltextSearch = new MiniSearch({
+var fulltextSearchOptions = {
   fields: ['strid', 'title', 'instanciable', 'description'], // fields to index for full-text search
   storeFields: ['id'], // fields to return with search results
   searchOptions: {
@@ -78,8 +79,14 @@ var fulltextSearch = new MiniSearch({
     prefix: true,
     fuzzy: 0.2,
   }
-});
+};
+var fulltextSearch = new MiniSearch(fulltextSearchOptions);
+fulltextSearch.__options = fulltextSearchOptions;
 fulltextSearch.documentById = {};
+function resetFulltextSearchObject(_fulltextSearch) // used by loader from disk
+{
+  fulltextSearch = _fulltextSearch;
+}
 
 var nodeTofullTextDocument = node=>
 {
@@ -114,6 +121,8 @@ var nodeTofullTextDocument = node=>
 var nodesToFullTextIndex = {};
 var willUpdateFullTextIndexForNode = node=>
 {
+  if(fulltextSearch.skipIndexing) return; // used during loading of the graph, when the index is restored from disk
+
   var id = node.id;
 
   if(!nodesToFullTextIndex[id])
@@ -122,14 +131,20 @@ var willUpdateFullTextIndexForNode = node=>
     if(fulltextSearch.documentById[id])
       fulltextSearch.remove(fulltextSearch.documentById[id]);
     var doc = fulltextSearch.documentById[id] = nodeTofullTextDocument(node);
-    if(doc) fulltextSearch.add(doc);
+    if(doc)
+    {
+      fulltextSearch.add(doc);
+      if(fulltextSearch.onDocAdded)
+        fulltextSearch.onDocAdded(doc);
+    }
     // console.log("FULLTEXT",JSON.stringify(doc));
     delete nodesToFullTextIndex[id];
   }
   ,500);
 
-  // nodesToFullTextIndex[id]();
+  nodesToFullTextIndex[id]();
 }
+
 
 
 class Claim
@@ -214,6 +229,7 @@ class Node
     _idToNodeIndex[this.id] = this;
     this.typeTos = {};
     this.typeFroms = {};
+    this.typeFromsCounts = {};
   }
   get name()
   {
@@ -260,6 +276,7 @@ class Node
       var fClaims = froms[this.id];
       if(!fClaims) fClaims = froms[this.id] = [];
       froms[this.id].push(claim);
+      to.typeFromsCounts[type.id] = (to.typeFromsCounts[type.id]||0)+1;
       // if(!froms) froms = to.typeFroms[type.id] = [];
       // TODO check already in ?
       // froms.push(this);
@@ -322,12 +339,22 @@ class Node
     if(!(to instanceof Node)) return undefined;
     return to;
   }
-  getToType_froms(type)
+  getToType_fromsCount(type) // approximate as currently not handling resets
+  {
+    return this.typeFromsCounts[type.id]||0;
+  }
+  getToType_froms(type) // approximate as currently not handling resets
   {
     // return this.typeFroms[type.id] || [];
     var set = this.typeFroms[type.id];
     if(!(set instanceof Object)) return [];
     return _.keys(set).map(id=>Node.makeById(id));
+  }
+  hasFrom(type,_from) // approximate as currently not handling resets, if claims are ordered, just look at the last one
+  {
+    var set = this.typeFroms[type.id];
+    if(!(set instanceof Object)) return false;
+    return set[_from.id] != undefined;
   }
 
   getFrom_types()
@@ -687,20 +714,49 @@ function makeUnique(typeTos)
 
   if(nodeTypeTos.length == 0) throw new Error("makeUnique() needs at least one value as node (other types are not indexed)");
 
-  var fromss = nodeTypeTos.map(([type,to])=>$$(to).getToType_froms($$(type)));
-  fromss = _.sortBy(fromss,froms=>froms.length);
-  // console.log('makeUnique()',fromss.map(froms=>froms.map( from=> $$(from,'object.prettyString') )));
-  var uniques = fromss[0];
-  for(var i=1;i<fromss.length && uniques.length > 0;i++)
-  {
-    uniques = _.intersection(uniques,fromss[i]);
-    // console.log('makeUnique()','uniques.length',uniques.length);
-  }
+  nodeTypeTos = nodeTypeTos.map(([type,to])=>({type:$$(type),to:$$(to)}));
+  valueTypeTos = valueTypeTos.map(([type,to])=>({type:$$(type),to:to}));
+  nodeTypeTos.forEach(o=> o.count = o.to.getToType_fromsCount(o.type) );
 
-  valueTypeTos.forEach(([T,t])=>
+  // console.log(JSON.stringify(nodeTypeTos.map(o=>o.count)));
+
+  var nodeTypeTosByCount = _.sortBy(nodeTypeTos,({count})=>count);
+  var smallestType = nodeTypeTosByCount[0].type;
+  var smallestTo = nodeTypeTosByCount[0].to;
+  var uniques = smallestTo.getToType_froms(smallestType);
+  nodeTypeTosByCount.shift(); // get rid of the smallest type, used as base selection
+  // console.log(uniques.length);
+
+  uniques = uniques.filter(_from=>
   {
-    uniques = uniques.filter(f=> f.$(T) == t);
+    for(var {type,to} of nodeTypeTosByCount)
+      if(!to.hasFrom(type,_from)) return false;
+    for(var {type,to} of valueTypeTos)
+      if(!_.isEqual(_from.getFromType_to(type),to)) return false;
+    return true;
   });
+
+
+  // nodeTypeTosByCount.forEach(({type,to})=>
+  // {
+  //   if(type == smallestType) return; // already handled as basis
+  //   uniques = uniques.filter(_from=> to.hasFrom(type,_from) );
+  // });
+
+  // var fromss = nodeTypeTos.map(([type,to])=>$$(to).getToType_froms($$(type)));
+  // fromss = _.sortBy(fromss,froms=>froms.length);
+  // // console.log('makeUnique()',fromss.map(froms=>froms.map( from=> $$(from,'object.prettyString') )));
+  // var uniques = fromss[0];
+  // for(var i=1;i<fromss.length && uniques.length > 0;i++)
+  // {
+  //   uniques = _.intersection(uniques,fromss[i]);
+  //   // console.log('makeUnique()','uniques.length',uniques.length);
+  // }
+
+  // valueTypeTos.forEach(([T,t])=>
+  // {
+  //   uniques = uniques.filter(f=> f.$(T) == t);
+  // });
 
     // console.log('makeUnique()','uniques.length',uniques.length,uniques.length&&$$(uniques[0],'object.prettyString'));
   // one or more found
@@ -834,7 +890,7 @@ function importClaims(compactJson)
 
 
 
-module.exports = {ServerContext,fulltextSearch,
+module.exports = {ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,};

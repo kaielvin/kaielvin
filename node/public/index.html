@@ -266,6 +266,9 @@ h1 small
 </div>
 
 <script>
+const WebClient = true;
+const ServerSide = false;
+
 var wait = ms => new Promise((r, j)=>setTimeout(r, ms))
 var resolvablePromise = () =>
 {
@@ -551,19 +554,37 @@ async function onHeaderSearch()
 }
 var searchResultsContainer = document.getElementById('searchResultsContainer');
 var searchInput = document.getElementById('headerSearch');
+var lastFullTextSearchCollection;
+var lastFullTextSearchDate = 0;
 async function onHeaderSearchChanged()
 {
-  searchResultsContainer.innerHTML = '';
-  var results = fulltextSearch.search(searchInput.value);
-  if(results.length > 25) results = results.slice(0,25);
-  results = results.map(({id})=>$$(id));
+  if(searchInput.value.length < 3) return;
 
-  results.forEach(result=>
-  {
-    searchResultsContainer.appendChild(htmlToElement(result.$('rowView')));
-  });
+  var descriptor = makeUnique([
+    ['object.instanceOf','descriptorFullTextSearch'],
+    ['descriptorFullTextSearch.input',{s:searchInput.value}],
+  ]);
+  var collection = descriptor.$('collection');
 
-  searchResultsContainer.style.visibility = results.length > 0 ? "visible" : "hidden";
+  goToObject(collection,undefined,
+    // skip pushing to history (update instead) if previous
+    // view was a search and less than 3 sec has passed
+    selectedNode==lastFullTextSearchCollection
+    && Date.now()-lastFullTextSearchDate < 3000);
+  lastFullTextSearchCollection = collection;
+  lastFullTextSearchDate = Date.now();
+
+  // searchResultsContainer.innerHTML = '';
+  // var results = fulltextSearch.search(searchInput.value);
+  // if(results.length > 25) results = results.slice(0,25);
+  // results = results.map(({id})=>$$(id));
+
+  // results.forEach(result=>
+  // {
+  //   searchResultsContainer.appendChild(htmlToElement(result.$('rowView')));
+  // });
+
+  // searchResultsContainer.style.visibility = results.length > 0 ? "visible" : "hidden";
 }
 
 function clearHeaderSearch()
@@ -907,7 +928,7 @@ async function pageCollection()
   // }
   loadingPagination = false;
 }
-var goToObject = async (node,method=undefined)=>
+var goToObject = async (node,method=undefined,throttled=false)=>
 {
   node = $$(node);
   var hash = node.name;
@@ -915,7 +936,12 @@ var goToObject = async (node,method=undefined)=>
   if(!method) method = defaultMethod;
   if(method != defaultMethod)
     hash+= '/'+method;
-  location.hash = hash;
+  if(throttled)
+  {
+    history.replaceState(null,null,'#'+hash);
+    showObject(node);
+  }
+  else location.hash = hash;
 }
 
 var _content = document.getElementById("content");
@@ -924,7 +950,7 @@ var selectedInstanciable = _instanciable;
 var selectedMethod;
 var showObject = async (node,updateHash=true,paginating=false)=>
 {
-  clearHeaderSearch();
+  // clearHeaderSearch();
 
   // var method = 'object.simpleView';
   selectedMethod = undefined;
@@ -1048,6 +1074,7 @@ var saveEditJs = ()=>
   {
     alert('could not compile js');
     console.error('saveEditJs()','could not compile js',e);
+    return;
   }
   console.log('saveEditJs()',myCodeMirrorDescriptor.$('prettyString'),String(js));
   myCodeMirrorDescriptor.$ex('insert',{j:js});

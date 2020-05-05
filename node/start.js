@@ -6,7 +6,6 @@ node start.js
 */
 
 
-
 var Promises = {};
 Promises.wait = ms => new Promise((r, j)=>setTimeout(r, ms))
 Promises.resolvablePromise = () =>
@@ -101,11 +100,12 @@ Promises.WorkerPool = WorkerPool;
 
 
 
+var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
 
 
 
 var _ = require('lodash');
-var {ServerContext,
+var {ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,} = require('./public/core.js');
@@ -125,9 +125,42 @@ fss.writeFile = promisify(fs.writeFile);
 //   console.log("Claim.onNewClaim() FROM DISK","ClaimID",claim.id,claim.idStr);
 // }
 
+
+
+var fulltextSearchCache = './fullTextIndex.cache.json';
+async function persistFullTextIndexNow()
+{
+  console.log("persistFullTextIndexNow()");
+  var fullTextOptions = fulltextSearch.__options;
+  var fullText = fulltextSearch.toJSON();
+  var documents = fulltextSearch.documentById;
+  fss.writeFile(fulltextSearchCache,JSON.stringify({fullTextOptions,fullText,documents}),'utf8');
+  console.log("persistFullTextIndexNow()",'done');
+}
+// technically, an object can be created, persisted, and the server killed before those 3 seconds (hence an object not indexed)
+var persistFullTextIndexDebounced = _.debounce(persistFullTextIndexNow,3000,{maxWait:120000});
+fulltextSearch.onDocAdded = persistFullTextIndexDebounced;
+
+var loadingFullTextFromDisk = fs.existsSync(fulltextSearchCache);
+if(loadingFullTextFromDisk)
+{
+  console.log("Loading fullTextIndex from disk…");
+  var fulltextSearchCacheStr = fs.readFileSync(fulltextSearchCache,{encoding:'utf8'});
+  var {fullTextOptions,fullText,documents} = JSON.parse(fulltextSearchCacheStr);
+  fulltextSearch = MiniSearch.loadJSON(JSON.stringify(fullText),fullTextOptions);
+  fulltextSearch.documentById = documents;
+  resetFulltextSearchObject(fulltextSearch);
+  console.log("Loading fullTextIndex from disk.");
+}
+
+
+
+
+
 var loadingFromDisk = fs.existsSync("./claims.jsonlist");
 if(loadingFromDisk)
 {
+  if(loadingFullTextFromDisk) fulltextSearch.skipIndexing = true;
   var claimsStr = fs.readFileSync("./claims.jsonlist",{encoding:'utf8'});
   var claims = claimsStr.split('\n').map((line,i)=>
   {
@@ -144,6 +177,7 @@ if(loadingFromDisk)
     // claim.from.addClaim(claim); // might not know about multipleValues on time
     return claim;
   });
+  if(loadingFullTextFromDisk) delete fulltextSearch.skipIndexing;
   console.log("Claims loaded from disk.","Claim count",claims.length-1);
 }
 
@@ -1287,6 +1321,11 @@ const wss = new WebSocket.Server({ port: 8080 });
  
 wss.on('connection', function connection(ws)
 {
+  console.log("on WS client connection openned.");
+  ws.on('close', async function incoming(message)
+  {
+    console.log("on WS client connection closed.");
+  });
   ws.on('message', async function incoming(message)
   {
     var message = JSON.parse(message);
@@ -1317,6 +1356,16 @@ wss.on('connection', function connection(ws)
       var {nodeIds} = message;
       nodeIds.forEach(nodeId=>
         responseClaimsStore.addAllNodeClaims(Node.makeById(nodeId),false));
+    }
+    if(message.request == 'fetchYoutubeChannel')
+    {
+      var {channelId} = message;
+      var channel = Node.makeById(channelId);
+      console.log("WS fetchYoutubeChannel()","channel",channel.id,channel.$('prettyString'));
+      var videos = await channel.$ex('fetch');
+      videos.forEach(video=>
+        responseClaimsStore.addAllNodeClaims(videos,false));
+      response.videos = videos.map(v=>v.id);
     }
 
 // {descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]}
@@ -1366,6 +1415,27 @@ wss.on('connection', function connection(ws)
 var makeYouTubeVideoFromPlaylistDataAndByFetching_Pool = new Promises.WorkerPool(25)
   .setWorker(async vid=> await $$('YoutubeVideo','instanciable.make')(vid,false,true) ); // {alreadyExisted,node}
 
+ServerContext.ensureAllVideosFetched = async (vids,excludeAlreadyExistent=true)=>
+{
+  var videosPromises = [];
+  for(var vid of vids)
+  {
+      await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
+      videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid));
+  }
+  var videos = await Promise.all(videosPromises);
+  // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length);
+  videos = videos.filter(video=>
+  {
+    if(excludeAlreadyExistent && video.alreadyExisted) return false;
+    if(!video.error) return true;
+    console.error("Failed loading video "+video.item,video.error);
+    return false;
+  }).map(({node})=>node); // TODO check these changes…
+  // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length,'.');
+  return videos;
+}
+
 ServerContext.cachedFetch_YoutubePlaylistVideos = async pid=>
 {
   var {extractedJson} = await ServerContext.cachedFetch_YoutubePlaylist2(pid);
@@ -1377,26 +1447,8 @@ ServerContext.cachedFetch_YoutubePlaylistVideos = async pid=>
     .itemSectionRenderer.contents[0]
     .playlistVideoListRenderer.contents
     .map(obj=>obj.playlistVideoRenderer.videoId);
-
-  var videosPromises = [];
-  for(var vid of vids)
-  {
-      await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
-      videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid));
-  }
-  var videos = await Promise.all(videosPromises);
-  // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length);
-  videos = videos.filter(video=>
-  {
-    if(video.alreadyExisted) return false;
-    if(!video.error) return true;
-    console.error("Failed loading video "+video.item,video.error);
-    return false;
-  }).map(({node})=>node); // TODO check these changes…
-  // console.log("cachedFetch_YoutubePlaylistVideos()","videos.length",videos.length,'.');
-  return videos;
+  return ServerContext.ensureAllVideosFetched(vids);
 }
-
 
 
 ServerContext.makeYoutubeChannel = (cid,title)=>
@@ -1418,8 +1470,8 @@ async function YouTubeHtmlFetch(cacheFolderName,url,id,jsonVariable)
 
   console.log("YouTubeHtmlFetch()",'url',url,'…');
   // var path = 'https://cors-anywhere.herokuapp.com/'+url;
-  // var path = 'http://35.180.160.234:4371/'+url;
-  var path = 'http://35.180.55.192:4371/'+url;
+  var path = 'http://35.180.160.234:4371/'+url; // kaielvin EC2
+  // var path = 'http://35.180.55.192:4371/'+url; // micro EC2
   // var path = url;
 
   var fetched = await fetch(path,{headers:{
@@ -1515,7 +1567,7 @@ ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
 
   var videoPromisesWithDate = [];
 
-  // json = json.slice(0,5000000);
+  json = json.slice(0,100);
   for(var {date,vid} of json)
   // json.forEach(({date,vid})=>
   {
@@ -1564,7 +1616,7 @@ if(true) (async ()=>
         [_instanceOf,_watching],
         [_watchingPerson,_kaielvin],
         [_watchingVideo,video],
-        [_watchingDate,date.valueOf()],
+        [_watchingDate,{n:date.valueOf()}],
       ]);
       // makeUnique([
       //   [_instanceOf,'watching'],
