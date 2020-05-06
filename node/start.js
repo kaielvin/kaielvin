@@ -1281,12 +1281,17 @@ app.use(express.static('public'))
 
 app.get('/all', (req, res) =>
 {
+  var excludedInstanciable = [
+    $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
+    $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
+  console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
   // TODO use the main ClaimStore
   var claimStore = new ClaimStore();
   for(var fromId in _idToNodeIndex)
   {
-    var instanciable = $$(fromId).$('instanceOf');
-    if(instanciable && (instanciable == $$('YoutubeVideo') || instanciable == $$('watching')))
+    var instanciable = Node.makeById(fromId).$(_instanceOf);
+    // console.log("GET /all",instanciable&&instanciable.$('prettyString'),instanciable && excludedInstanciable.includes(instanciable));
+    if(instanciable && excludedInstanciable.includes(instanciable))
       continue;
     claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
   }

@@ -902,7 +902,7 @@ async function pageCollection()
     if(!collectionContainer) console.error("pageCollection()","collectionContainer not found on DOM.");
     else results.forEach(r=>
     {
-      console.log("pageCollection() adding to DOM: ",r.id,r.$('prettyString'));
+      // console.log("pageCollection() adding to DOM: ",r.id,r.$('prettyString'));
       collectionContainer.appendChild(htmlToElement(  r.$ex('rowView')  ));
     });
 
@@ -1001,6 +1001,10 @@ var showObject = async (node,updateHash=true,paginating=false)=>
   }
   // await wait(0);
   // if(!paginating) pageCollection(node);
+
+
+  var ftDesc = node.$ex('searchTreeBy',n=> n.$('instanceOf') == $$('descriptorFullTextSearch'));
+  console.log('showObject()',"fulltextSearch descriptor:",ftDesc&&ftDesc.$('prettyString'));
 }
 
 var _selectedDescriptor = document.getElementById("selectedDescriptor");
