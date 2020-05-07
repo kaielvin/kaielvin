@@ -108,7 +108,8 @@ var _ = require('lodash');
 var {ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
-  ClaimStore,importClaims,} = require('./public/core.js');
+  ClaimStore,importClaims,
+  garbageCollect,} = require('./public/core.js');
 
 const fetch = require("node-fetch");
 var fs = require('fs');
@@ -139,7 +140,6 @@ async function persistFullTextIndexNow()
 }
 // technically, an object can be created, persisted, and the server killed before those 3 seconds (hence an object not indexed)
 var persistFullTextIndexDebounced = _.debounce(persistFullTextIndexNow,3000,{maxWait:120000});
-fulltextSearch.onDocAdded = persistFullTextIndexDebounced;
 
 var loadingFullTextFromDisk = fs.existsSync(fulltextSearchCache);
 if(loadingFullTextFromDisk)
@@ -148,10 +148,13 @@ if(loadingFullTextFromDisk)
   var fulltextSearchCacheStr = fs.readFileSync(fulltextSearchCache,{encoding:'utf8'});
   var {fullTextOptions,fullText,documents} = JSON.parse(fulltextSearchCacheStr);
   fulltextSearch = MiniSearch.loadJSON(JSON.stringify(fullText),fullTextOptions);
+  fulltextSearch.__options = fullTextOptions;
   fulltextSearch.documentById = documents;
   resetFulltextSearchObject(fulltextSearch);
   console.log("Loading fullTextIndex from disk.");
 }
+fulltextSearch.onDocRemoved = persistFullTextIndexDebounced;
+fulltextSearch.onDocAdded = persistFullTextIndexDebounced;
 
 
 
@@ -161,6 +164,7 @@ var loadingFromDisk = fs.existsSync("./claims.jsonlist");
 if(loadingFromDisk)
 {
   if(loadingFullTextFromDisk) fulltextSearch.skipIndexing = true;
+  Claim.hideDeleteLogs = true;
   var claimsStr = fs.readFileSync("./claims.jsonlist",{encoding:'utf8'});
   var claims = claimsStr.split('\n').map((line,i)=>
   {
@@ -177,16 +181,18 @@ if(loadingFromDisk)
     // claim.from.addClaim(claim); // might not know about multipleValues on time
     return claim;
   });
+  delete Claim.hideDeleteLogs;
   if(loadingFullTextFromDisk) delete fulltextSearch.skipIndexing;
   console.log("Claims loaded from disk.","Claim count",claims.length-1);
 }
 
 // .jsonlist : 1 json object per line (in this case, one claim as .toCompactJson() per line)
 var stream = fs.createWriteStream("./claims.jsonlist", {flags:'a',encoding: 'utf8'});
-Claim.onNewClaim = claim=>
+Claim.onNewClaim = (claim,remove=false)=>
 {
-  console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
+  if(!remove) console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
   var compactJson = claim.toCompactJson();
+  if(remove) compactJson.del = true;
   stream.write(JSON.stringify(compactJson) + "\n");
 }
 
@@ -435,7 +441,7 @@ if(!loadingFromDisk)
     if(!type) return undefined;
     var to = $$(o,'descriptorFrom.to');
     if(!to) return undefined;
-    var instance = new Node();
+    var instance = Node.make();
     $$(instance,type,to);
     return instance;
   });
@@ -1362,6 +1368,12 @@ wss.on('connection', function connection(ws)
       nodeIds.forEach(nodeId=>
         responseClaimsStore.addAllNodeClaims(Node.makeById(nodeId),false));
     }
+    if(message.request == 'deleteNodesById')
+    {
+      var {nodeIds} = message;
+      nodeIds.forEach(nodeId=>
+        Node.makeById(nodeId).delete());
+    }
     if(message.request == 'fetchYoutubeChannel')
     {
       var {channelId} = message;
@@ -1599,7 +1611,11 @@ ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
   return videosWithDate;
 }
 
-if(true) (async ()=>
+console.log("NODE COUNT",_.size(_idToNodeIndex));
+
+garbageCollect();
+
+if(false) (async ()=>
 {
 
     var _kaielvin = $$('kaielvin');

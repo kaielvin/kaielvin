@@ -84,11 +84,11 @@ h1 small
   display: none;
 }
 
-#selectedDescriptor
+/*#selectedDescriptor
 {
   margin-top: 3em;
 }
-
+*/
 .items
 {
   display: grid;
@@ -232,6 +232,28 @@ h1 small
   justify-content: center; 
 }
 
+.node-link
+{
+  position: relative;
+}
+.node-link-shortcut
+{
+  display: block;
+  position: absolute;
+  font-weight: normal;
+  top: -0.5em;
+  right: -1.3rem;
+  font-size: 0.8rem;
+  color: #fff;
+  background: #333;
+  /*padding: 0.2rem;*/
+  width: 1rem;
+  height: 1.2rem;
+  border-radius: 0.3rem;
+  text-align: center;
+  line-height: 1.2rem;
+  z-index: 1;
+}
 
 
 
@@ -248,15 +270,15 @@ h1 small
 <div id="app">
     <div class="left">
       <div id="header">
-        <a href="#kaisHome">[h]</a>
-        <span class="link" onclick="addToClipboard()">[b]</span>
+        <!-- <a href="#kaisHome">[h]</a> -->
+        <!-- <span class="link" onclick="addToClipboard()">[b]</span> -->
         <div>
           <form onsubmit="onHeaderSearch()"><input type="text" id="headerSearch" oninput="onHeaderSearchChanged()" autocomplete="off" /></form>
           <div id="searchResults"><div id="searchResultsContainer"></div></div>
         </div>
       </div>
       <div id="content"></div>
-      <div id="selectedDescriptor"></div>
+      <!-- <div id="selectedDescriptor"></div> -->
       <textarea id="codeEditor"></textarea>
     </div>
     <div class="right">
@@ -296,6 +318,13 @@ function htmlToElement(html) {
     template.innerHTML = html;
     return template.content.firstChild;
 }
+function isVisible(elm) {
+  var rect = elm.getBoundingClientRect();
+  // var viewHeight = Math.max(document.documentElement.clientHeight, window.innerHeight);
+  var viewHeight = window.innerHeight;
+  // console.log("isVisible()","rect.bottom",rect.bottom,"viewHeight",viewHeight);
+  return !(rect.bottom < 0 || rect.top - viewHeight >= 0);
+}
 
 
 
@@ -334,35 +363,47 @@ async function openClaimsDB()
 
 
 var persistedCount = 0;
+var persistedDeletedCount = 0;
 function reportPersistedNow()
 {
-  console.log("reportPersistedNow()","persisted",persistedCount,"claims");
+  console.log("reportPersistedNow()","persisted",persistedCount,"claims","and removed",persistedDeletedCount,"claims");
   persistedCount = 0;
+  persistedDeletedCount = 0;
 }
 var reportPersistedDebounced = _.throttle(reportPersistedNow,5000);
-function reportPersisted()
+function reportPersisted(remove=false)
 {
-  persistedCount++;
+  if(remove) persistedDeletedCount++;
+  else persistedCount++;
   reportPersistedDebounced();
 }
 
-async function persistClaim(claim)
+async function persistClaim(claim,remove=false)
 {
-  var claimJson = claim.toCompactJson();
-  claimJson.id = claim.id;
-  await claimsDB.put('claims', claimJson);
-  reportPersisted();
+  if(remove)
+  {
+    var response = await claimsDB.delete('claims', claim.id);
+    console.log('persistClaim() deleted','response',response);
+  }
+  else
+  {
+    var claimJson = claim.toCompactJson();
+    claimJson.id = claim.id;
+    await claimsDB.put('claims', claimJson);
+  }
+  reportPersisted(remove);
   // console.log("persistClaim()","claim",claim.id,claim.idStr,"persisted");
 }
 
 // Claim.onNewClaim = persistClaim;
 var _skipPersistLocal = false;
 var _skipPersistServer = false;
-Claim.onNewClaim = claim=>
+Claim.onNewClaim = (claim,remove=false)=>
 {
-  if(!_skipPersistLocal) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
-  if(!_skipPersistLocal) persistClaim(claim);
-  if(!_skipPersistServer) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"sendClaimToServer()");
+  if(!_skipPersistLocal && !remove) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
+  if(!_skipPersistLocal) persistClaim(claim,remove);
+  if(remove) return;
+  // if(!_skipPersistServer) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"sendClaimToServer()");
   if(!_skipPersistServer) sendClaimToServer(claim);
 };
 
@@ -499,6 +540,11 @@ async function fetchNodesFromServer(nodes)
   console.log("fetchNodesByIdFromServer() done. Nodes: ",nodes.map(n=>n.$('prettyString')));
   await fectchComplementaryNodesFromServer(nodes);
 }
+async function deleteNodesFromServer(nodes)
+{
+  await wsFetch({request:"deleteNodesById",nodeIds:nodes.map(n=>n.id)});
+  console.log("deleteNodesFromServer() done. Nodes: ",nodes.map(n=>n.$('prettyString')));
+}
 
 // async function fetchCollectionFromServer(collection,skip=0,limit=10)
 // {
@@ -538,34 +584,70 @@ async function serverFetchCollection(collection,skip=0,limit=10,localIds=[])
 
 
 
-async function onHeaderSearch()
-{
-  var input = document.getElementById('headerSearch').value;
-  var youtubeVideoUrlRegex = /https:\/\/www.youtube.com\/watch\?v=([a-zA-Z0-9\-]+)/;
-  var youtubeVideoUrlMatch = input.match(youtubeVideoUrlRegex);
-  if(youtubeVideoUrlMatch)
-  {
-    var vid = youtubeVideoUrlMatch[1];
-    // var response = await wsFetch({multiple:false,descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]});
-    var response = await wsFetch({request:"makeYouTubeVideo",vid});
-    goToObject(response.videoId);
-  }
-  document.getElementById('headerSearch').value = '';
-}
+// async function onHeaderSearch()
+// {
+//   var input = document.getElementById('headerSearch').value;
+//   var youtubeVideoUrlRegex = /https:\/\/www.youtube.com\/watch\?v=([a-zA-Z0-9\-]+)/;
+//   var youtubeVideoUrlMatch = input.match(youtubeVideoUrlRegex);
+//   if(youtubeVideoUrlMatch)
+//   {
+//     var vid = youtubeVideoUrlMatch[1];
+//     // var response = await wsFetch({multiple:false,descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]});
+//     var response = await wsFetch({request:"makeYouTubeVideo",vid});
+//     goToObject(response.videoId);
+//   }
+//   document.getElementById('headerSearch').value = '';
+// }
 var searchResultsContainer = document.getElementById('searchResultsContainer');
 var searchInput = document.getElementById('headerSearch');
 var lastFullTextSearchCollection;
 var lastFullTextSearchDate = 0;
-async function onHeaderSearchChanged()
+var waitingUnpureTextSearch = false;
+function onHeaderSearchChanged(_waitingUnpureTextSearch)
 {
-  if(searchInput.value.length < 3) return;
+  if(_waitingUnpureTextSearch == false) waitingUnpureTextSearch = false;
+  if(_waitingUnpureTextSearch == true ) waitingUnpureTextSearch = true;
+  if(searchInput.value.length < 3) return removeUnpureTextSearch();
 
-  var descriptor = makeUnique([
-    ['object.instanceOf','descriptorFullTextSearch'],
-    ['descriptorFullTextSearch.input',{s:searchInput.value}],
-  ]);
-  var collection = descriptor.$('collection');
+  var unpure = currentlyUnpureTextSearching();
+  if(waitingUnpureTextSearch && !unpure)
+    if(startUnpureTextSearch()) return;
+  if(waitingUnpureTextSearch && unpure)
+    if(updateTextSearch()) return; // should always return
 
+  startPureTextSearch();
+}
+
+function removeUnpureTextSearch()
+{
+  var unpureSearched = currentlyUnpureTextSearching();
+  if(!unpureSearched) return false;
+  var collection = unpureSearched.$('collection');
+  pushTextSearchCollection(collection);
+  return true;
+}
+
+// function currentlyPureTextSearching()
+// {
+//   if(selectedInstanciable != $$('collection')) return false;
+//   var descriptor = selectedNode.$('descriptor');
+//   if(descriptor.$('instanceOf') != $$('descriptorFullTextSearch')) return false;
+//   return true;
+// }
+function currentlyUnpureTextSearching()
+{
+  if(selectedInstanciable != $$('collection')) return false;
+  var descriptor = selectedNode.$('descriptor');
+  if(descriptor.$('instanceOf') != $$('descriptorIntersection')) return false;
+  var inOrdered = descriptor.$('inOrdered');
+  if(inOrdered.$('instanceOf') != $$('descriptorFullTextSearch')) return false;
+  var ins = descriptor.$('in');
+  if(ins.length != 1) return false;
+  return ins[0];
+}
+
+function pushTextSearchCollection(collection)
+{
   goToObject(collection,undefined,
     // skip pushing to history (update instead) if previous
     // view was a search and less than 3 sec has passed
@@ -573,18 +655,75 @@ async function onHeaderSearchChanged()
     && Date.now()-lastFullTextSearchDate < 3000);
   lastFullTextSearchCollection = collection;
   lastFullTextSearchDate = Date.now();
+}
 
-  // searchResultsContainer.innerHTML = '';
-  // var results = fulltextSearch.search(searchInput.value);
-  // if(results.length > 25) results = results.slice(0,25);
-  // results = results.map(({id})=>$$(id));
+function startPureTextSearch()
+{
+  console.log("startPureTextSearch()");
+  var descriptor = makeUnique([
+    ['object.instanceOf','descriptorFullTextSearch'],
+    ['descriptorFullTextSearch.input',{s:searchInput.value}],
+  ]);
+  collection = descriptor.$('collection');
+  pushTextSearchCollection(collection);
+}
 
-  // results.forEach(result=>
+function startUnpureTextSearch()
+{
+  console.log("startUnpureTextSearch() ?");
+  if(selectedInstanciable != $$('collection')) return false; // can't
+  var descriptor = selectedNode.$('descriptor');
+  var ins;
+  // if(descriptor.$('instanceOf') == $$('descriptorIntersection'))
   // {
-  //   searchResultsContainer.appendChild(htmlToElement(result.$('rowView')));
-  // });
+  //   var ins = descriptor.$('in');
+  //   var inOrdered = descriptor.$('inOrdered');
+  //   if(inOrdered) ins.push(inOrdered);
+  // }
+  // else ins = [descriptor];
+  ins = [descriptor];
 
-  // searchResultsContainer.style.visibility = results.length > 0 ? "visible" : "hidden";
+  var descriptorFT = makeUnique([
+    ['object.instanceOf','descriptorFullTextSearch'],
+    ['descriptorFullTextSearch.input',{s:searchInput.value}],
+  ]);
+  var descriptorInsUnique = [
+    ['object.instanceOf','descriptorIntersection'],
+    ['descriptorIntersection.inOrdered',descriptorFT],
+  ];
+  ins.forEach(_in=> descriptorInsUnique.push(['descriptorIntersection.in',_in]) );
+  var descriptorIns = makeUnique(descriptorInsUnique);
+  collection = descriptorIns.$('collection');
+  console.log("startUnpureTextSearch()",collection.$('prettyString'));
+  pushTextSearchCollection(collection);
+  return true;
+}
+
+function updateTextSearch()
+{
+  console.log("updateTextSearch() ?");
+  // if(searchInput.value.length < 3) return false;
+  if(selectedInstanciable != $$('collection')) return false;
+
+  var wasSearching = false;
+  var searchableClaimTypes = [$$('descriptorIntersection.in'),$$('descriptorIntersection.inOrdered'),
+    $$('collection.descriptor'),
+    $$('descriptorDifference.positive'),$$('descriptorDifference.negative')];
+  var collection = selectedNode.$ex('cloneTreeReplacingBy',
+    n=>
+    {
+      if(n.$('instanceOf') != $$('descriptorFullTextSearch')) return n;
+      wasSearching = true;
+      return makeUnique([
+        ['object.instanceOf','descriptorFullTextSearch'],
+        ['descriptorFullTextSearch.input',{s:searchInput.value}]]);
+    },
+    claimType=> searchableClaimTypes.includes(claimType)
+  );
+
+  if(!wasSearching) return false;
+  pushTextSearchCollection(collection);
+  return true;
 }
 
 function clearHeaderSearch()
@@ -595,33 +734,107 @@ function clearHeaderSearch()
 
   searchResultsContainer.style.visibility = "hidden";
   searchInput.value = '';
+  if(removeUnpureTextSearch()) needed = true;
 
   return needed;
 }
 
 
 
+const LinkShortcuts = "0123456789abcdefghijklmnopqrstuvwxyz";
+var showingLinkShortcuts = false;
+var idToShortcut;
+var shortcutToId;
+function showLinkShortcuts()
+{
+  if(showingLinkShortcuts) return;
+  // console.log("showLinkShortcuts()");
+  var links = [...document.getElementsByClassName('node-link')];
+  links = links.filter(link=>link&&isVisible(link));
+  var idList = [];
+  idToShortcut = {};
+  shortcutToId = {};
+  links.forEach(link=>
+  {
+    var id = link.dataset.id;
+    var shortcut = idToShortcut[id];
+    if(!shortcut)
+    {
+      shortcut = idToShortcut[id] = LinkShortcuts[idList.length];
+      if(shortcut) shortcutToId[shortcut] = id;
+      idList.push(id);
+    }
+    // console.log("showLinkShortcuts()","link",link.dataset.id,Node.makeById(link.dataset.id).$('prettyString'));
+
+    if(shortcut) link.appendChild(htmlToElement('<span class="node-link-shortcut">'+shortcut+'</span>'));
+  });
+  showingLinkShortcuts = true;
+}
+function hideLinkShortcuts()
+{
+  [...document.getElementsByClassName('node-link-shortcut')].forEach(e=>e.remove());
+  showingLinkShortcuts = false;
+}
+function refreshLinkShortcutsNow()
+{
+  if(!showingLinkShortcuts) return;
+  hideLinkShortcuts();
+  showLinkShortcuts();
+}
+// var refreshLinkShortcutsThrottled = _.throttle(refreshLinkShortcutsNow,50);
+var refreshLinkShortcutsThrottled = refreshLinkShortcutsNow;
 
 
 
 
-
-
-// const CollectionShortcuts = "0123456789abcdefghijklmnopqrstuvwxyz";
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', async e => {
   
   var c = e.ctrlKey;
   var s = e.shiftKey;
-  // console.log("keydown",e.key,e.ctrlKey);
-  if(myCodeMirror.hasFocus())
+
+
+  if(!c&&!s&& showingLinkShortcuts && shortcutToId[e.key])
   {
-    if(!c&&!s&& e.key == 'Escape')
+    var id = shortcutToId[e.key];
+    hideLinkShortcuts();
+    showObject(Node.makeById(id));
+    return e.preventDefault();
+  }
+
+
+
+  if(!c&&!s&& e.key == 'Escape')
+  {
+    if(myCodeMirror.hasFocus() && myCodeMirrorFloating)
     {
       console.log("escaping editor…","myCodeMirrorUnsaved",myCodeMirrorUnsaved);
       if(!myCodeMirrorUnsaved || confirm("There are unsaved change. Exit editor anyway?"))
         myCodeMirrorElStyle.visibility = "hidden";
-      return e.preventDefault();
     }
+    else if(document.activeElement == searchInput || myCodeMirror.hasFocus())
+    {
+      // Give the document focus
+      window.focus();
+
+      // Remove focus from any focused element
+      if (document.activeElement)
+          document.activeElement.blur();
+    }
+    else if(showingLinkShortcuts) hideLinkShortcuts();
+    else clearHeaderSearch();
+
+    return e.preventDefault();
+  }
+
+
+  // console.log("keydown",e.key,e.ctrlKey);
+  if(!c&&!s&& e.key == 'Enter' && !myCodeMirrorFloating && !myCodeMirror.hasFocus())
+  {
+    myCodeMirror.focus();
+    return e.preventDefault();
+  }
+  if(myCodeMirror.hasFocus())
+  {
     if( c&&!s&& (e.key == 's' || e.key == 't'))
     {
       console.log("saving…");
@@ -634,23 +847,12 @@ document.addEventListener('keydown', (e) => {
   else
   if(searchInput !== document.activeElement)
   {
-    if( c&& s&& e.key == 'e')
+    if( c&& s&& e.key == 'e' && myCodeMirrorFloating)
     {
       myCodeMirrorElStyle.visibility = "visible";
       return e.preventDefault();
     }
 
-
-    if(!c&&!s&& e.key == 'a')
-    {
-      window.history.back();
-      return e.preventDefault();
-    }
-    if(!c&&!s&& e.key == 'e')
-    {
-      window.history.forward();
-      return e.preventDefault();
-    }
 
 
     // if(e.ctrlKey)
@@ -670,8 +872,199 @@ document.addEventListener('keydown', (e) => {
     //     }
     //   }
     // }
-
   }
+
+  if(myCodeMirror.hasFocus())
+    return;
+  if(searchInput == document.activeElement)
+    return;
+
+
+
+
+
+  if(!c&&!s&& e.key == ' ')
+  {
+    if(showingLinkShortcuts) hideLinkShortcuts();
+    else showLinkShortcuts();
+    return e.preventDefault();
+  }
+
+  if(!c&&!s&& e.key == 'p')
+  {
+    if(selectedInstanciable == $$('claimType'))
+      goToObject(selectedNode.$('typeFrom'));
+    return e.preventDefault();
+  }
+
+  if(!c&&!s&& (e.key == 'a' || e.key == 'ArrowLeft'))
+  {
+    window.history.back();
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'e')
+  {
+    window.history.forward();
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'd')
+  {
+    if(!confirm('Are you sure?')) return;
+    selectedNode.delete();
+    deleteNodesFromServer([selectedNode]);
+    window.history.back();
+    e.stopPropagation();
+    return e.preventDefault();
+  }
+
+
+  if(!c&&!s&& e.key == 'v')
+  {
+    var defaultMethod = selectedNode.$ex('object.defaultPageView');
+    if(selectedMethod != defaultMethod)
+      goToObject(selectedNode);
+    else if(selectedMethod != 'simpleView')
+      goToObject(selectedNode,'simpleView');
+      // window.location.hash = selectedNode.name+'/simpleView';
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'i')
+  {
+    var instanciable = selectedNode.$('instanceOf');
+    if(instanciable) goToObject(instanciable);
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'b')
+  {
+    addToClipboard();
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'g')
+  {
+    // goToObject(_.last(loggedUser.$('clipboard')));
+    goToObject(_.first(Node.makeById('93a8def8').$('resolve')));
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'f')
+  {
+    searchInput.focus();
+    searchInput.value = '';
+    onHeaderSearchChanged(false);
+    return e.preventDefault();
+  }
+  if( c&&!s&& e.key == 'f')
+  {
+    searchInput.focus();
+    searchInput.value = '';
+    onHeaderSearchChanged(true);
+    return e.preventDefault();
+  }
+
+  if(!c&&!s&& e.key == 'z')
+  {
+    // TESTTEST
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'ArrowUp')
+  {
+    if(selectedInstanciable == $$('accessorTo')   || selectedInstanciable == $$('descriptorTo')
+    || selectedInstanciable == $$('accessorFrom') || selectedInstanciable == $$('descriptorFrom'))
+      goToObject(selectedNode.$('type') || selectedNode.$('types'));
+    if(selectedInstanciable == $$('claimType'))
+      goToObject(selectedNode.$('typeFrom'));
+    if(selectedInstanciable == $$('descriptorDifference'))
+      goToObject(selectedNode.$('positive'));
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'ArrowRight')
+  {
+    if(selectedInstanciable == $$('collection'))
+      goToObject(selectedNode.$('descriptor'));
+    if(selectedInstanciable == $$('uniqueBy') || selectedInstanciable == $$('sort'))
+      goToObject(selectedNode.$('in'));
+    if(selectedInstanciable == $$('accessorFrom') || selectedInstanciable == $$('descriptorFrom'))
+      goToObject(selectedNode.$('to') || selectedNode.$('tos'));
+    if(selectedInstanciable == $$('claimType'))
+      goToObject(selectedNode.$('typeTo'));
+    if(selectedInstanciable == $$('descriptorDifference'))
+      goToObject(selectedNode.$('negative'));
+    if(selectedInstanciable == $$('accessorTo') || selectedInstanciable == $$('descriptorTo'))
+      goToObject(selectedNode.$('from') || selectedNode.$('froms'));
+
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'n')
+  {
+    if(selectedInstanciable == _instanciable)
+    {
+      var newInstanceDesc = makeUnique([
+        [_instanceOf,'descriptorFrom'],
+        ['descriptorFrom.type',_instanceOf],
+        ['descriptorFrom.to',selectedNode],
+      ]);
+      createInDescriptor(newInstanceDesc);
+    }
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'r')
+  {
+    e.preventDefault();
+    await fetchNodesFromServer([selectedNode]);
+    showObject(selectedNode);
+    return;
+  }
+
+  if(!c&&!s&& e.key == 'c')
+  {
+    if(selectedNode.$('instanceOf') == $$('collection'))
+    {
+      var mainContainingNode = selectedNode.$('mainContainingNode');
+      if(mainContainingNode) goToObject(mainContainingNode);
+    }
+    else
+    {
+      var collection = selectedNode.$('collection');
+      if(collection) goToObject(collection);
+    }
+    return e.preventDefault();
+  }
+
+  var menu = document.getElementsByClassName("menu")[0];
+  // console.log(menu instanceof Element);
+  // console.log(menu);
+  var options = menu && menu.getElementsByClassName("option");
+  options = options && Array.prototype.slice.call(options) || [];
+  // console.log(options);
+
+  options = options && options.map(option=>
+    {
+      var links = option.getElementsByTagName('a');
+      var link = links && links[0];
+      // console.log(link);
+      // console.log(link.href);
+      return link && link.href;
+    });
+
+  if(!c&&!s&& e.key == '.')               return location.hash = "kaisHome";
+  if(!c&&!s&& e.key == '0' && options[0]) return window.location.href = options[0];
+  // else if(e.key == '0')          location.hash = "kaisHome";
+  // if(e.key == '0'              ) location.hash = "kaisHome";
+  // if(e.key == '9' && options[0]) location.hash = options[0].substring(1);
+  // if(e.key == '6' && options[1]) location.hash = options[1].substring(1);
+  // if(e.key == '3' && options[2]) location.hash = options[2].substring(1);
+  if(!c&&!s&& e.key == '1' && options[1]) return window.location.href = options[1];
+  if(!c&&!s&& e.key == '2' && options[2]) return window.location.href = options[2];
+  if(!c&&!s&& e.key == '3' && options[3]) return window.location.href = options[3];
+
+
+  if(!c&&!s&& e.key.charCodeAt() >= '0'.charCodeAt() && e.key.charCodeAt() <= '9'.charCodeAt())
+  {
+    var i = e.key.charCodeAt() - '0'.charCodeAt();
+    var clipboard = Node.makeById('93a8def8').$('resolve');
+    goToObject(clipboard[i]);
+    return;
+  }
+
 });
 
 
@@ -681,82 +1074,13 @@ document.addEventListener('keyup', (e) => {
   var c = e.ctrlKey;
   var s = e.shiftKey;
 
+
+
   // console.log("keyup",e.key,e.ctrlKey);
   if(myCodeMirror.hasFocus())
-  {
     return;
-  }
-
-  if(!c&&!s&& e.key == 'Escape')
-  {
-    clearHeaderSearch();
-  }
-  if(searchInput !== document.activeElement)
-  {
-    if(!c&&!s&& e.key == 'v')
-    {
-      var defaultMethod = selectedNode.$ex('object.defaultPageView');
-      if(selectedMethod != defaultMethod)
-        goToObject(selectedNode);
-      else if(selectedMethod != 'simpleView')
-        goToObject(selectedNode,'simpleView');
-        // window.location.hash = selectedNode.name+'/simpleView';
-      return e.preventDefault();
-    }
-    if(!c&&!s&& e.key == 'i')
-    {
-      var instanciable = selectedNode.$('instanceOf');
-      if(instanciable) goToObject(instanciable);
-      return e.preventDefault();
-    }
-    if(!c&&!s&& e.key == 'b')
-    {
-      addToClipboard();
-      return e.preventDefault();
-    }
-
-    if(!c&&!s&& e.key == 'c')
-    {
-      if(selectedNode.$('instanceOf') == $$('collection'))
-      {
-        var mainContainingNode = selectedNode.$('mainContainingNode');
-        if(mainContainingNode) goToObject(mainContainingNode);
-      }
-      else
-      {
-        var collection = selectedNode.$('collection');
-        if(collection) goToObject(collection);
-      }
-      return e.preventDefault();
-    }
-
-    var menu = document.getElementsByClassName("menu")[0];
-    // console.log(menu instanceof Element);
-    // console.log(menu);
-    var options = menu && menu.getElementsByClassName("option");
-    options = options && Array.prototype.slice.call(options) || [];
-    // console.log(options);
-
-    options = options && options.map(option=>
-      {
-        var links = option.getElementsByTagName('a');
-        var link = links && links[0];
-        // console.log(link);
-        // console.log(link.href);
-        return link && link.href;
-      });
-
-    if(!c&&!s&& e.key == '.')               location.hash = "kaisHome";
-    if(!c&&!s&& e.key == '0' && options[0]) window.location.href = options[0];
-    // else if(e.key == '0')          location.hash = "kaisHome";
-    // if(e.key == '0'              ) location.hash = "kaisHome";
-    // if(e.key == '9' && options[0]) location.hash = options[0].substring(1);
-    // if(e.key == '6' && options[1]) location.hash = options[1].substring(1);
-    // if(e.key == '3' && options[2]) location.hash = options[2].substring(1);
-    if(!c&&!s&& e.key == '1' && options[1]) window.location.href = options[1];
-    if(!c&&!s&& e.key == '2' && options[2]) window.location.href = options[2];
-    if(!c&&!s&& e.key == '3' && options[3]) window.location.href = options[3];
-  }
+  if(searchInput == document.activeElement)
+    return;
 });
 
 
@@ -859,6 +1183,8 @@ var viewport = ()=>
 
 window.onscroll = function()
 {
+
+  if(showingLinkShortcuts) refreshLinkShortcutsThrottled();
   var contentBox = document.body.getBoundingClientRect()
   var bottomPos = document.body.scrollTop+viewport().height;
   // console.log(document.body.scrollTop,contentBox.height,viewport().height,bottomPos>contentBox.height-500);
@@ -881,7 +1207,7 @@ var loadingPagination = false;
 async function pageCollection()
 {
   loadingPagination = true;
-  if(selectedInstanciable != $$('collection'))
+  if(selectedInstanciable != $$('collection') || selectedMethod != 'page')
   {
     collectionPagingInfo = undefined;
     return;
@@ -1003,20 +1329,38 @@ var showObject = async (node,updateHash=true,paginating=false)=>
   // if(!paginating) pageCollection(node);
 
 
-  var ftDesc = node.$ex('searchTreeBy',n=> n.$('instanceOf') == $$('descriptorFullTextSearch'));
-  console.log('showObject()',"fulltextSearch descriptor:",ftDesc&&ftDesc.$('prettyString'));
+  // var ftDesc = node.$ex('searchTreeBy',n=> n.$('instanceOf') == $$('descriptorFullTextSearch'));
+  // console.log('showObject()',"fulltextSearch descriptor:",ftDesc&&ftDesc.$('prettyString'));
+
+  if(instanciable == $$('claimType') && node.$('functional'))
+  {
+    var descriptor = makeUnique([
+      [_instanceOf,"descriptorTo"],
+      ['descriptorTo.from',node],
+      ['descriptorTo.type','claimType.resolve'],
+    ]);
+    console.log('showObject()','Init editor',descriptor.$('prettyString'));
+    var value = descriptor.$("resolve");
+    var jsStr = value && value.j && String(value.j) || "function()\n{\n  \n}";
+    initEditor( node.$('resolve'),'claimTypeCodeEditor',false);
+    myCodeMirror.setValue(jsStr);
+    myCodeMirrorElStyle.visibility = "visible";
+    myCodeMirrorUnsaved = false;
+    // myCodeMirror.focus();
+    myCodeMirrorDescriptor = descriptor;
+  }
 }
 
-var _selectedDescriptor = document.getElementById("selectedDescriptor");
-var selectedDescriptor;
-var updateSelectedDescriptor = descriptor=>
-{
-  console.log("updateSelectedDescriptor()","descriptor",descriptor);
-  _selectedDescriptor.innerHTML = '';
-  _selectedDescriptor.appendChild(htmlToElement($$(descriptor,'object.htmlSmallDescription')));
+// var _selectedDescriptor = document.getElementById("selectedDescriptor");
+// var selectedDescriptor;
+// var updateSelectedDescriptor = descriptor=>
+// {
+//   console.log("updateSelectedDescriptor()","descriptor",descriptor);
+//   _selectedDescriptor.innerHTML = '';
+//   _selectedDescriptor.appendChild(htmlToElement($$(descriptor,'object.htmlSmallDescription')));
 
-  selectedDescriptor = descriptor;
-}
+//   selectedDescriptor = descriptor;
+// }
 var editStringDescriptor = descriptor=>
 {
   // if(!confirm('Are you sure?')) return;
@@ -1049,7 +1393,7 @@ var editJavascriptDescriptor = descriptor=>
   myCodeMirror.setValue(jsStr);
   myCodeMirrorElStyle.visibility = "visible";
   myCodeMirrorUnsaved = false;
-  myCodeMirror.focus();
+  // myCodeMirror.focus();
   myCodeMirrorDescriptor = descriptor;
 
   // $$( $$(descriptor,"descriptorTo.from"),$$(descriptor,"descriptorTo.type"),{s:newString} );
@@ -1085,6 +1429,7 @@ var saveEditJs = ()=>
 }
 var createInDescriptor = descriptor=>
 {
+  if(!confirm('Are you sure?')) return;
   var instance = $$(descriptor,'descriptorFrom.instanciate');
   goToObject(instance);
 }
@@ -1191,9 +1536,12 @@ var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring
   await importData('http://localhost:3000/all');
   console.log("Claims loaded from server.");
 
+
   loggedUser = $$('person').$froms('instanceOf').find(u=>u.$('title') == 'Kai Elvin');
   console.log("loggedUser",loggedUser&&loggedUser.$('title'));
 
+  garbageCollect();
+  
   // var playlist = await fetchYoutubePlaylists('UCDDe2Yh15Yj4ljU_2f311mQ');
   // fetchYoutubePlaylist('PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ');
 
@@ -1202,47 +1550,67 @@ var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring
 
   // var request = indexedDB.open("library");
 
-  console.log(JSON.stringify(Claim.comb));
-  console.log(_.sum(Claim.comb));
-
   // fetchYoutubeData('xWggTb45brM');
   // const items = await indexedDB.transaction('testStore').objectStore('testStore').getAll()
+
+
+  // console.log("UNQIQUEUNIQUSQENEEE",makeUnique([
+  //   ['object.instanceOf','descriptorIntersection'],
+  //   ['descriptorIntersection.inOrdered',Node.makeById('61c74673')],
+  //   ['descriptorIntersection.in',Node.makeById('c13c92bd')],
+  // ]).id);
+  // console.log(stridToNode('undefined'))
+
+
 }
 )();
 
 
-
-
-var myCodeMirror = CodeMirror.fromTextArea(document.getElementById("codeEditor"), {
-  // value: "function myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\nfunction myScript(){return 100;}\n",
-  mode:  "javascript",
-  extraKeys: {"Ctrl-Space": "autocomplete",
-              "Ctrl-/": "toggleComment",
-            },
-  lineWrapping: true,
-  lineNumbers: true,
-  // autofocus: true,
-  cursorScrollMargin: 2, // doesn't seem to work
-  spellcheck: true,
-  autocorrect: true,
-  theme: "material-darker",
-  scrollbarStyle: "overlay",
-});
-
-var myCodeMirrorUnsaved = false;
-myCodeMirror.on('change',()=> myCodeMirrorUnsaved = true);
-
-
-
-var myCodeMirrorElStyle = myCodeMirror.getWrapperElement().style;
-myCodeMirrorElStyle.visibility = "hidden";
-myCodeMirrorElStyle.position = "fixed";
-myCodeMirrorElStyle.height = "auto";
-myCodeMirrorElStyle.left = "10px";
-myCodeMirrorElStyle.right = "10px";
-myCodeMirrorElStyle.top = "50px";
-myCodeMirrorElStyle.bottom = "50px";
+var myCodeMirror;
+var myCodeMirrorUnsaved;
+var myCodeMirrorElStyle
 var myCodeMirrorDescriptor;
+var myCodeMirrorFloating;
+function initEditor(value,id="codeEditor",floating=true)
+{
+  myCodeMirror = CodeMirror.fromTextArea(document.getElementById(id), {
+    value,
+    mode:  "javascript",
+    extraKeys: {"Ctrl-Space": "autocomplete",
+                "Ctrl-/": "toggleComment",
+              },
+    lineWrapping: true,
+    lineNumbers: true,
+    // autofocus: true,
+    cursorScrollMargin: 2, // doesn't seem to work
+    spellcheck: true,
+    autocorrect: true,
+    theme: "material-darker",
+    scrollbarStyle: "overlay",
+  });
+
+  myCodeMirrorUnsaved = false;
+  myCodeMirror.on('change',()=> myCodeMirrorUnsaved = true);
+
+  myCodeMirrorFloating = floating;
+  myCodeMirrorElStyle = myCodeMirror.getWrapperElement().style;
+  if(floating)
+  {
+    myCodeMirrorElStyle.visibility = "hidden";
+    myCodeMirrorElStyle.position = "fixed";
+    myCodeMirrorElStyle.height = "auto";
+    myCodeMirrorElStyle.left = "10px";
+    myCodeMirrorElStyle.right = "10px";
+    myCodeMirrorElStyle.top = "50px";
+    myCodeMirrorElStyle.bottom = "50px";
+  }
+  else
+  {
+    myCodeMirrorElStyle.height = "60em";
+    myCodeMirrorElStyle['margin-bottom'] = "1.5em";
+  }
+}
+initEditor();
 
 </script>
 

@@ -116,6 +116,7 @@ var nodeTofullTextDocument = node=>
     console.error("nodeTofullTextDocument()",node.id,"doc.description && !_.isString(doc.description)",JSON.stringify(doc.description));
     return null;
   }
+  if(!doc.strid && !doc.title && !doc.instanciable && !doc.description) return null; // only the id, not interesting
   return doc;
 }
 var nodesToFullTextIndex = {};
@@ -129,10 +130,16 @@ var willUpdateFullTextIndexForNode = node=>
   nodesToFullTextIndex[id] = _.debounce(()=>
   {
     if(fulltextSearch.documentById[id])
+    {
+      // console.log("willUpdateFullTextIndexForNode()","removing",JSON.stringify(fulltextSearch.documentById[id]));
       fulltextSearch.remove(fulltextSearch.documentById[id]);
+      if(fulltextSearch.onDocRemoved)
+        fulltextSearch.onDocRemoved(doc);
+    }
     var doc = fulltextSearch.documentById[id] = nodeTofullTextDocument(node);
     if(doc)
     {
+      // console.log("willUpdateFullTextIndexForNode()","adding",JSON.stringify(doc),_.size(doc),_.size({...doc}));
       fulltextSearch.add(doc);
       if(fulltextSearch.onDocAdded)
         fulltextSearch.onDocAdded(doc);
@@ -193,9 +200,19 @@ class Claim
     // console.log(str);
     return hashHex(str);
   }
+  delete(skipRemovingFromNode=true)
+  {
+    if(!Claim.hideDeleteLogs) console.log("Claim.delete()",this.id,this.type.strid,this.idStr);
+    // this.deleted = true;
+    this.from.removeClaim(this);
+    if(Claim.onNewClaim) Claim.onNewClaim(this,true);
+    var id = this.id;
+    delete Claim.idIndex[id];
+    // Claim.deletedIdIndex[id] = this;
+  }
 }
+// Claim.deletedIdIndex = {};
 Claim.idIndex = {};
-Claim.comb = _.fill(Array(500), 0);
 Claim.make = function(from_,type,to,claimer,date)
 {
   var claim = new Claim(from_,type,to,claimer,date);
@@ -204,7 +221,6 @@ Claim.make = function(from_,type,to,claimer,date)
   if(fromIndex) return fromIndex; // already indexed
   claim.from.addClaim(claim);
   if(Claim.onNewClaim) Claim.onNewClaim(claim);
-  Claim.comb[Math.floor(Claim.comb.length * hashTo01(id) )]++;
   return Claim.idIndex[id] = claim;
 }
 Claim.fromCompactJson = function(json)
@@ -216,17 +232,18 @@ Claim.fromCompactJson = function(json)
             :                      json.t;
   var claimer = Node.makeById(json.c);
   var date = new Date(json.d);
-  return Claim.make(from_,type,to,claimer,date);
+  var claim = Claim.make(from_,type,to,claimer,date);
+  if(json.del) claim.delete();
+  return claim;
 }
 
-
-var _idToNodeIndex = {};
 class Node
 {
   constructor(id)
   {
-    this.id = id || randHex();
-    _idToNodeIndex[this.id] = this;
+    if(!id) throw new Error("id undefined");
+    // this.id = id || randHex();
+    this.id = id;
     this.typeTos = {};
     this.typeFroms = {};
     this.typeFromsCounts = {};
@@ -242,31 +259,64 @@ class Node
     var claim = Claim.make(this,type,to,Node.defaultUser); // will call this.addClaim() if needed
     // console.log("Node.setFromType()","claim",claim.id,claim.idStr);
   }
-  addClaim(claim)
+  removeClaim(claim)
+  {
+    this.addClaim(claim,true);
+  }
+  addClaim(claim,_remove=false)
   {
     var {type,to} = claim; // claim.from should be this
     if(to && to.s) willUpdateFullTextIndexForNode(this);
 
     // if(type == _strid && to && to.s)
-    if(type == _strid && to && to.s && this.stridDate)
-    {
-    console.log("reset strid (Node.addClaim)",this.id,"strid",claim.id,claim.date,this.strid,'=>',to.s,this.stridDate);
+    // if(type == _strid && to && to.s && this.stridDate)
+    //   console.log("reset strid (Node.addClaim)",this.id,"strid",claim.id,claim.date,this.strid,'=>',to.s,this.stridDate);
 
+
+    // this claim (being removed) was the strid one, find the previous one
+    if( _remove && type == _strid
+       && this.stridClaim == claim)
+    {
+      console.log('Node.addClaim() _remove','REMOVE STRID',claim.to.s);
+      var claims = this.typeTos[_strid.id];
+      var previous = _.maxBy(claims,c=>c==claim?0:c.date.valueOf()) // excludes this claim
+      if(previous == claim) // was the only one removing strid data
+      {
+        delete _stridClaims[claim.to.s];
+        delete this.strid;
+        delete this.stridClaim;
+        delete this.stridDate;
+      }
+      else
+      {
+        delete _stridClaims[claim.to.s];
+        var newStrid = previous.to.s;
+        _stridClaims[newStrid] = previous;
+        this.strid = newStrid;
+        this.stridClaim = previous;
+        this.stridDate = previous.date;
+      }
+
+      if(_stridClaims[claim.to.s]) console.log('Node.addClaim() _remove','REMOVE STRID stillthere',claim.to.s);
     }
-    if(type == _strid && to && to.s
+
+    if(!_remove && type == _strid && to && to.s
       && (!this.stridDate || claim.date.valueOf() > this.stridDate.valueOf())
       && (!_stridClaims[to.s] || claim.date.valueOf() > _stridClaims[to.s].date.valueOf()))
     {
       delete _stridClaims[this.strid];
       _stridClaims[to.s] = claim;
       this.strid = to.s;
+      this.stridClaim = claim;
       this.stridDate = claim.date;
     }
+
 
     var claims = this.typeTos[type.id];
     if(!claims) claims = this.typeTos[type.id] = [];
     // claim.sameTosClaims = claims;
-    claims.push(claim);
+    if(!_remove) claims.push(claim);
+    else _.pull(claims,claim);
 
     // add this to the new to's typeFroms index
     if(to instanceof Node)
@@ -274,9 +324,28 @@ class Node
       var froms = to.typeFroms[type.id];
       if(!froms) froms = to.typeFroms[type.id] = {};
       var fClaims = froms[this.id];
-      if(!fClaims) fClaims = froms[this.id] = [];
-      froms[this.id].push(claim);
-      to.typeFromsCounts[type.id] = (to.typeFromsCounts[type.id]||0)+1;
+      if(!fClaims) fClaims = froms[this.id] = []; // should not happen if _remove
+      if(!_remove) fClaims.push(claim);
+      else         _.pull(fClaims,claim);
+      if(fClaims.length == 0)
+      {
+        delete froms[this.id];
+        if(_.size(froms) == 0) delete to.typeFroms[type.id];
+      }
+      to.typeFromsCounts[type.id] = (to.typeFromsCounts[type.id]||0)+(_remove?-1:+1);
+
+      // clean up
+      if(_remove)
+      {
+        if(fClaims.length == 0)
+        {
+          delete froms[this.id];
+          if(_.size(froms) == 0) delete to.typeFroms[type.id];
+        }
+        if(to.typeFromsCounts[type.id] == 0)
+          delete to.typeFromsCounts[type.id];
+      }
+
       // if(!froms) froms = to.typeFroms[type.id] = [];
       // TODO check already in ?
       // froms.push(this);
@@ -288,6 +357,7 @@ class Node
   {
     var claims = this.typeTos[type.id];
     if(!claims) return [];
+    if(claims.length == 0) return undefined;
 
     if(unique) claims = _.uniqBy(claims,c=>c.to.id);
     if(byDate) claims = _.sortBy(claims,c=>c.date.valueOf());
@@ -308,6 +378,7 @@ class Node
   {
     var claims = this.typeTos[type.id];
     if(!claims) return undefined; // TODO try to return _undefined to allow chaining
+    if(claims.length == 0) return undefined;
     // if(_.isArray(claim)) // should have at least 1 claim
     // if(claims.length > 1 && claims[0].to && claims[0].to.s)
     //   console.log("getFromType_to() claims.length > 1",this.name,'>',type.name,'>',
@@ -424,9 +495,44 @@ class Node
   {
     return this.id+': '+this.$('prettyString');
   }
+
+  delete()
+  {
+    console.log("Node.delete()",this.id,this.strid,this.$('prettyString'));
+    const deleteClaim = function(claim){claim.delete()};
+    for(var typeId in this.typeTos)
+    {
+      console.log("Node.delete()","toType",Node.makeById(typeId).strid,this.typeTos[typeId].length);
+      var claims = [...this.typeTos[typeId]];
+      claims.forEach(deleteClaim);
+    }
+    // leave them point to an empty node
+    // they should be carbage collectable if this node is deleted anyway
+    // for(var typeId in this.typeFroms)
+    // {
+    //   console.log("Node.delete()","fromType",Node.makeById(typeId).strid);
+    //   var perFromClaims = this.typeFroms[typeId];
+    //   for(var fromId in perFromClaims)
+    //   {
+    //     var claims = [...perFromClaims[fromId]];
+    //     claims.forEach(deleteClaim);
+    //   }
+    // }
+
+    delete _idToNodeIndex[this.id]; // object potentially kept by from indexes
+  }
 }
 
-Node.makeById = id=> _idToNodeIndex[id] || new Node(id);
+
+
+var _idToNodeIndex = {};
+Node.makeById = id=>
+{
+  var node = _idToNodeIndex[id];
+  if(node) return node;
+  return _idToNodeIndex[id] = new Node(id);
+}
+Node.make = ()=> Node.makeById(randHex());
 
 var _stridClaims = {};
 
@@ -442,7 +548,7 @@ function makeNode(name,id=undefined)
   node = _idToNodeIndex[name];
   if(node) return node;
   if(id) node = _idToNodeIndex[id];
-  if(!node) node = new Node(id);
+  if(!node) node = id ? Node.makeById(id) : Node.make();
   if(node.strid != name)
     node.setFromType(_strid,{s:name});
   return node;
@@ -548,7 +654,7 @@ function strToType(str,fromObject=undefined)
 */
 function $$(i1,i2,i3,i4)
 {
-  if(!i1) return new Node();
+  if(!i1) return Node.make();
 
 
   /*
@@ -703,6 +809,12 @@ var valueToHtml = value=>
       : value; // should be number
 
 
+var Context = {variables:{}};
+Context.resolveVariable = function(variable)
+{
+  return Context.variables[variable.id];
+}
+
 
 function makeUnique(typeTos)
 {
@@ -711,13 +823,20 @@ function makeUnique(typeTos)
   // typeTos.forEach(([type,to])=>
   //   console.log('makeUnique()',$$(type,'object.prettyString'),$$(to,'object.prettyString'),$$(to).getToType_froms($$(type)).map( from=> $$(from,'object.prettyString') ) ) );
   
+  // TODO check *all* non-functional to fields (in particularly that they are indeed empty if not in the description)
+
   var [nodeTypeTos,valueTypeTos] = _.partition(typeTos, ([T,t])=> _.isString(t) || t instanceof Node);
 
   if(nodeTypeTos.length == 0) throw new Error("makeUnique() needs at least one value as node (other types are not indexed)");
 
   nodeTypeTos = nodeTypeTos.map(([type,to])=>({type:$$(type),to:$$(to)}));
   valueTypeTos = valueTypeTos.map(([type,to])=>({type:$$(type),to:to}));
-  nodeTypeTos.forEach(o=> o.count = o.to.getToType_fromsCount(o.type) );
+  var toCountPerType = {};
+  nodeTypeTos.forEach(o=>
+  {
+    toCountPerType[o.type.id] = (toCountPerType[o.type.id]||0)+1;
+    o.count = o.to.getToType_fromsCount(o.type);
+  });
 
   // console.log(JSON.stringify(nodeTypeTos.map(o=>o.count)));
 
@@ -730,6 +849,15 @@ function makeUnique(typeTos)
 
   uniques = uniques.filter(_from=>
   {
+    var toCountCheckedTypes = {};
+    for(var {type} of nodeTypeTosByCount)
+    {
+      if(toCountCheckedTypes[type.id]) continue; // just previously checked
+      if(type.$('multipleValues') != _true) continue;
+      if(_from.getFromType_nodes(type).length != toCountPerType[type.id])
+        return false; // not the same number of two values (too little or too much)
+      toCountCheckedTypes[type.id] = true;
+    }
     for(var {type,to} of nodeTypeTosByCount)
       if(!to.hasFrom(type,_from)) return false;
     for(var {type,to} of valueTypeTos)
@@ -890,8 +1018,76 @@ function importClaims(compactJson)
 
 
 
+function garbageCollect()
+{
+  var garbageCollectables = [$$('descriptorIntersection'),$$('descriptorTo'),$$('descriptorFrom'),$$('descriptorDifference'),$$('collection'),$$('descriptorFullTextSearch'),$$('accessorTo'),$$('variable'),$$('uniqueBy')];
+  var keptInstanciables = $$('instanciable').$froms('object.instanceOf');
+  keptInstanciables = _.without(keptInstanciables,...garbageCollectables);
+  var instanciableClaimTypes = {};
+  var getClaimTypes = instanciable=>
+  {
+    if(instanciableClaimTypes[instanciable.id])
+      return instanciableClaimTypes[instanciable.id];
+    return instanciableClaimTypes[instanciable.id] = _.concat(
+        instanciable.$froms(_typeFrom),
+        _object.$froms(_typeFrom)
+      )
+      .filter(claimType=>claimType.$(_functional) != _true);
+  }
+  var saveClaimMap = {};
+  var saveNodeMap = {};
+  var saveNode = (node,instanciable)=>
+  {
+    if(!node) return;
+    if(saveNodeMap[node.id]) return; // saved already
+    saveNodeMap[node.id] = node;
+    instanciable = instanciable || node.$(_instanceOf);
+    if(!instanciable) console.error ("Node without instanciable",node.id);
+    var claimTypes = getClaimTypes(instanciable || _object);
+    for(var type of claimTypes)
+    {
+      // var multipleValues = claimType.$(_multipleValues) == _true;
+      var claims = node.typeTos[type.id];
+      if(claims)
+      for(var claim of claims)
+      {
+        saveClaimMap[claim.id] = claim;
+        if(claim.to instanceof Node)
+          saveNode(claim.to);
+      }
+    }
+  }
+
+  [_object,_undefined,_anything].forEach(node=>saveNode(node));
+
+  for(var instanciable of keptInstanciables)
+  {
+     var instances = instanciable.$froms(_instanceOf);
+    console.log("Keeping",instanciable.$('prettyString'),instances.length);
+    for(var node of instances) saveNode(node,instanciable);
+    // var toClaimTypes = _.concat(instanciable.$froms('claimType.typeFrom'),_object.$froms('claimType.typeFrom'))
+    //   .filter(claimType=>claimType.$('functional') != $$('true'));
+    // for(var claimType of toClaimTypes)
+    //    console.log("    … ",claimType.$('prettyString'));
+  }
+
+  var garbageCollected = _.values(_idToNodeIndex).filter(node=>!saveNodeMap[node.id]);
+  // for(var node of garbageCollected)
+  //   console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
+
+  var garbageCollectedClaims = _.values(Claim.idIndex).filter(claim=>!saveClaimMap[claim.id]);
+    console.log("garbageCollect() collecting",garbageCollectedClaims.length,"out of",_.size(Claim.idIndex));
+  Claim.hideDeleteLogs = true;
+  garbageCollectedClaims.forEach(claim=>claim.delete());
+  delete Claim.hideDeleteLogs;
+
+  // garbageCollected.forEach(node=>node.delete());
+    console.log("garbageCollect() claims # after:",_.size(Claim.idIndex));
+}
+
 
 module.exports = {ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
-  ClaimStore,importClaims,};
+  ClaimStore,importClaims,
+  garbageCollect,};
