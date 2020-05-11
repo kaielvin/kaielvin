@@ -277,7 +277,7 @@ class Node
     if( _remove && type == _strid
        && this.stridClaim == claim)
     {
-      console.log('Node.addClaim() _remove','REMOVE STRID',claim.to.s);
+      // console.log('Node.addClaim() _remove','REMOVE STRID',claim.to.s);
       var claims = this.typeTos[_strid.id];
       var previous = _.maxBy(claims,c=>c==claim?0:c.date.valueOf()) // excludes this claim
       if(previous == claim) // was the only one removing strid data
@@ -296,8 +296,6 @@ class Node
         this.stridClaim = previous;
         this.stridDate = previous.date;
       }
-
-      if(_stridClaims[claim.to.s]) console.log('Node.addClaim() _remove','REMOVE STRID stillthere',claim.to.s);
     }
 
     if(!_remove && type == _strid && to && to.s
@@ -452,7 +450,7 @@ class Node
 
   $froms(type)
   {
-    type = strToType(type,this); // should maybe not seach the to's instanciable methods…
+    type = strToType(type,this); // should maybe not search the to's instanciable methods…
     if(!type) return [];
     return this.getToType_froms(type);
   }
@@ -578,6 +576,11 @@ var _strid          = Node.makeById('13d4c779');
 var _multipleValues = Node.makeById('d605bb65');
 var _true           = Node.makeById('8d377661');
 var _object         = Node.makeById('8dd2a277');
+var _class          = Node.makeById('7ee96d65');
+var _abstractClass  = Node.makeById('e3246c5f');
+var _subClassOf     = Node.makeById('2c90c5b8');
+var _classes        = Node.makeById('b4d463ea');
+var _supClasses     = Node.makeById('cb40bedd');
 var _anything       = Node.makeById('f0cfe989');
 var _instanceOf     = Node.makeById('19c0f376');
 var _instanciable   = Node.makeById('ce0b87e4');
@@ -593,45 +596,74 @@ var _kaielvin       = Node.makeById('d086fe37');
 
 Node.defaultUser = _kaielvin;
 
-Node.initCore = function()
-{
-  _strid            .setFromType(_strid,{s:"object.strid"});
-  _multipleValues   .setFromType(_strid,{s:"claimType.multipleValues"});
-  _true             .setFromType(_strid,{s:"true"});
-  _object           .setFromType(_strid,{s:"object"});
-  _anything         .setFromType(_strid,{s:"anything"});
-  _instanceOf       .setFromType(_strid,{s:"object.instanceOf"});
-  _instanciable     .setFromType(_strid,{s:"instanciable"});
-  _claimType        .setFromType(_strid,{s:"claimType"});
-  _typeFrom         .setFromType(_strid,{s:"claimType.typeFrom"});
-  _typeTo           .setFromType(_strid,{s:"claimType.typeTo"});
-  _jsMethod         .setFromType(_strid,{s:"jsMethod"});
-  _undefined        .setFromType(_strid,{s:"undefined"});
-  _defaultValue     .setFromType(_strid,{s:"claimType.defaultValue"});
-  _functional       .setFromType(_strid,{s:"claimType.functional"});
-  _resolve          .setFromType(_strid,{s:"claimType.resolve"});
-  _kaielvin         .setFromType(_strid,{s:"kaielvin"});
+// Node.initCore = function()
+// {
+//   _strid            .setFromType(_strid,{s:"object.strid"});
+//   _multipleValues   .setFromType(_strid,{s:"claimType.multipleValues"});
+//   _true             .setFromType(_strid,{s:"true"});
+//   _object           .setFromType(_strid,{s:"object"});
+//   _class            .setFromType(_strid,{s:"class"});
+//   _abstractClass    .setFromType(_strid,{s:"abstractClass"});
+//   _subClassOf       .setFromType(_strid,{s:"subClassOf"});
+//   _anything         .setFromType(_strid,{s:"anything"});
+//   _instanceOf       .setFromType(_strid,{s:"object.instanceOf"});
+//   _instanciable     .setFromType(_strid,{s:"instanciable"});
+//   _claimType        .setFromType(_strid,{s:"claimType"});
+//   _typeFrom         .setFromType(_strid,{s:"claimType.typeFrom"});
+//   _typeTo           .setFromType(_strid,{s:"claimType.typeTo"});
+//   _jsMethod         .setFromType(_strid,{s:"jsMethod"});
+//   _undefined        .setFromType(_strid,{s:"_undefined"});
+//   _defaultValue     .setFromType(_strid,{s:"claimType.defaultValue"});
+//   _functional       .setFromType(_strid,{s:"claimType.functional"});
+//   _resolve          .setFromType(_strid,{s:"claimType.resolve"});
+//   _kaielvin         .setFromType(_strid,{s:"kaielvin"});
 
-  // var _multipleValues = makeNode("multipleValues",'d605bb65');
-  // var _true = makeNode("true",'8d377661');
-}
+//   // var _multipleValues = makeNode("multipleValues",'d605bb65');
+//   // var _true = makeNode("true",'8d377661');
+// }
 
-function strToType(str,fromObject=undefined)
+function strToType(str,node=undefined,classes=undefined)
 {
-  // if(!str) throw new Error("undefined string input");
-  if(!str) return undefined;
+  if(!str) throw new Error("undefined string input");
   if(str instanceof Node) return str;
-  var typeObject = undefined;
-  if(_.isString(str) && !str.includes('.')) str = '.'+str;
-  if(_.isString(str) && str[0] == '.' && fromObject)
+  if(!_.isString(str)) throw new Error('not a string');
+  if(str[0] == '.') str = str.substring(1); // deprecated, might still be used
+  if(str.includes('.'))
   {
-    var instanciable = fromObject.getFromType_node(_instanceOf);
-    if(instanciable) typeObject = stridToNode(instanciable.name+str);
-    if(!typeObject) typeObject = stridToNode('object'+str);
-    if(!typeObject) throw new Error('strToType() '+str+" not found on "+fromObject.name+" instanceof "+(instanciable&&instanciable.name));
+    var type = stridToNode(str);
+    if(!type) throw new Error('not found ("'+str+'")');
+    return type;
   }
-  else typeObject = resolveIntoNode(str);
-  return typeObject;
+  if(node||classes)
+  {
+    classes = classes || node.$ex(_classes);
+    if(classes instanceof Node)
+    {
+      console.error(new Error("strToType() deprecated use of strToType with instanciable (provide classes or nothing), provided: "+classes.name));
+      classes = classes.$('class.supClasses');
+    }
+    if(!_.isArray(classes)) console.error("strToType()","!_.isArray(classes)",classes);
+    for(var class_ of classes)
+    {
+      var type = stridToNode(class_.name+'.'+str);
+      if(type) return type;
+    }
+  }
+  var type = node ? undefined : stridToNode('object.'+str); // last attempt
+  if(!type) throw new Error('not found ("'+str+'")'+(node?' node='+node.name:'')+(classes?' classes='+classes.map(c=>c.name).join():''));
+  return type;
+
+  // var typeObject = undefined;
+  // if(_.isString(str) && !str.includes('.')) str = '.'+str;
+  // if(_.isString(str) && str[0] == '.' && (node||instanciable))
+  // {
+  //   instanciable = instanciable || node.getFromType_node(_instanceOf);
+  //   if(instanciable) typeObject = stridToNode(instanciable.name+str);
+  //   if(!typeObject) typeObject = stridToNode('object'+str);
+  //   if(!typeObject) throw new Error('strToType() '+str+" not found on "+node.name+" instanceof "+(instanciable&&instanciable.name));
+  // }
+  // else typeObject = resolveIntoNode(str);
+  // return typeObject;
 }
 
 
@@ -738,8 +770,7 @@ function $$(i1,i2,i3,i4)
 
   if(!fromObject) fromObject = resolveIntoNode(i1);
   if(!fromObject) return undefined;
-
-
+  if(i2 === undefined) return fromObject;
 
   var typeObject;
   try
@@ -816,6 +847,14 @@ Context.resolveVariable = function(variable)
 }
 
 
+function instanciate(instanciable,...typeTos)
+{
+  instanciable = resolveIntoNode(instanciable);
+  typeTos.forEach(v=>v[0] = strToType(v[0],undefined,instanciable.$(_supClasses)));
+  typeTos.unshift([_instanceOf,instanciable]);
+  // console.log("instanciate()",instanciable.name,typeTos);
+  return makeUnique(typeTos);
+}
 function makeUnique(typeTos)
 {
     // console.log('makeUnique()');
@@ -829,8 +868,8 @@ function makeUnique(typeTos)
 
   if(nodeTypeTos.length == 0) throw new Error("makeUnique() needs at least one value as node (other types are not indexed)");
 
-  nodeTypeTos = nodeTypeTos.map(([type,to])=>({type:$$(type),to:$$(to)}));
-  valueTypeTos = valueTypeTos.map(([type,to])=>({type:$$(type),to:to}));
+  nodeTypeTos = nodeTypeTos.map(([type,to])=>({type:resolveIntoNode(type),to:resolveIntoNode(to)}));
+  valueTypeTos = valueTypeTos.map(([type,to])=>({type:resolveIntoNode(type),to:to}));
   var toCountPerType = {};
   nodeTypeTos.forEach(o=>
   {
@@ -892,7 +931,7 @@ function makeUnique(typeTos)
   if(uniques.length > 0) return uniques[0];
 
   // else create one
-  var unique = $$();
+  var unique = Node.make();
   typeTos.forEach(([type,to])=>$$(unique,type,to));
   return unique;
 }
@@ -1018,9 +1057,14 @@ function importClaims(compactJson)
 
 
 
-function garbageCollect()
+function garbageCollect(extraGarbageCollectables=[])
 {
-  var garbageCollectables = [$$('descriptorIntersection'),$$('descriptorTo'),$$('descriptorFrom'),$$('descriptorDifference'),$$('collection'),$$('descriptorFullTextSearch'),$$('accessorTo'),$$('variable'),$$('uniqueBy')];
+  var garbageCollectables = [
+    $$('descriptorIntersection'),$$('descriptorTo'),$$('descriptorFrom'),$$('descriptorDifference'),
+    $$('collection'),$$('descriptorFullTextSearch'),
+    $$('accessorTo'),$$('accessorFrom'),
+    $$('variable'),$$('uniqueBy'),$$('sort')];
+  garbageCollectables.push(...extraGarbageCollectables);
   var keptInstanciables = $$('instanciable').$froms('object.instanceOf');
   keptInstanciables = _.without(keptInstanciables,...garbageCollectables);
   var instanciableClaimTypes = {};

@@ -120,6 +120,7 @@ fss.readFile = promisify(fs.readFile);
 fss.writeFile = promisify(fs.writeFile);
 
 
+
 // overwritten right after
 // Claim.onNewClaim = claim=>
 // {
@@ -190,7 +191,7 @@ if(loadingFromDisk)
 var stream = fs.createWriteStream("./claims.jsonlist", {flags:'a',encoding: 'utf8'});
 Claim.onNewClaim = (claim,remove=false)=>
 {
-  if(!remove) console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
+  // if(!remove) console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
   var compactJson = claim.toCompactJson();
   if(remove) compactJson.del = true;
   stream.write(JSON.stringify(compactJson) + "\n");
@@ -644,9 +645,6 @@ if(!loadingFromDisk)
         .$('title',{s:'watch educative video'})
         .$('linked',$$('KaiWatchingList'))
     )
-
-
-
 
 
 
@@ -1613,7 +1611,7 @@ ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
 
 console.log("NODE COUNT",_.size(_idToNodeIndex));
 
-garbageCollect();
+// garbageCollect();
 
 if(false) (async ()=>
 {

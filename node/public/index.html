@@ -222,7 +222,14 @@ h1 small
   display: flex;
   flex-direction: row;
 }
-.collection-items > div > .shortcut
+
+
+.dom-shortcut
+{
+  display: flex;
+  flex-direction: row;
+}
+.collection-items > div > .shortcut, .dom-shortcut-id
 {
   width: 2em;
   font-size: 0.7em;
@@ -242,7 +249,9 @@ h1 small
   position: absolute;
   font-weight: normal;
   top: -0.5em;
-  right: -1.3rem;
+  /*right: -1.3rem;*/
+  opacity: 0.7;
+  left: -1.3rem;
   font-size: 0.8rem;
   color: #fff;
   background: #333;
@@ -383,7 +392,7 @@ async function persistClaim(claim,remove=false)
   if(remove)
   {
     var response = await claimsDB.delete('claims', claim.id);
-    console.log('persistClaim() deleted','response',response);
+    // console.log('persistClaim() deleted','response',response);
   }
   else
   {
@@ -400,7 +409,7 @@ var _skipPersistLocal = false;
 var _skipPersistServer = false;
 Claim.onNewClaim = (claim,remove=false)=>
 {
-  if(!_skipPersistLocal && !remove) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
+  // if(!_skipPersistLocal && !remove) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
   if(!_skipPersistLocal) persistClaim(claim,remove);
   if(remove) return;
   // if(!_skipPersistServer) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"sendClaimToServer()");
@@ -791,7 +800,10 @@ document.addEventListener('keydown', async e => {
   
   var c = e.ctrlKey;
   var s = e.shiftKey;
+  var inputHasFocus = searchInput === document.activeElement;
 
+
+  // console.log('keydown',!!c,!!s,e.key);
 
   if(!c&&!s&& showingLinkShortcuts && shortcutToId[e.key])
   {
@@ -803,15 +815,34 @@ document.addEventListener('keydown', async e => {
 
 
 
+  if(!c&&!s&& e.key == 'Enter' && inputHasFocus)
+  {
+    console.log('Enter while in searchInput');
+    clearHeaderSearch();
+    if (document.activeElement)
+        document.activeElement.blur();
+    showLinkShortcuts();
+    var id = shortcutToId['0'];
+    if(id) showObject(Node.makeById(id));
+    else hideLinkShortcuts();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+
+
   if(!c&&!s&& e.key == 'Escape')
   {
-    if(myCodeMirror.hasFocus() && myCodeMirrorFloating)
+    if(selectedMethod == 'resolvablesView')
+      goToObject(selectedNode);
+    else if(myCodeMirror.hasFocus() && myCodeMirrorFloating)
     {
       console.log("escaping editor…","myCodeMirrorUnsaved",myCodeMirrorUnsaved);
       if(!myCodeMirrorUnsaved || confirm("There are unsaved change. Exit editor anyway?"))
         myCodeMirrorElStyle.visibility = "hidden";
     }
-    else if(document.activeElement == searchInput || myCodeMirror.hasFocus())
+    else if(inputHasFocus || myCodeMirror.hasFocus())
     {
       // Give the document focus
       window.focus();
@@ -828,7 +859,7 @@ document.addEventListener('keydown', async e => {
 
 
   // console.log("keydown",e.key,e.ctrlKey);
-  if(!c&&!s&& e.key == 'Enter' && !myCodeMirrorFloating && !myCodeMirror.hasFocus())
+  if(!c&&!s&& e.key == 'Enter' && !myCodeMirrorFloating && !myCodeMirror.hasFocus() && !inputHasFocus)
   {
     myCodeMirror.focus();
     return e.preventDefault();
@@ -845,7 +876,7 @@ document.addEventListener('keydown', async e => {
     }
   }
   else
-  if(searchInput !== document.activeElement)
+  if(!inputHasFocus)
   {
     if( c&& s&& e.key == 'e' && myCodeMirrorFloating)
     {
@@ -874,12 +905,24 @@ document.addEventListener('keydown', async e => {
     // }
   }
 
+
+
   if(myCodeMirror.hasFocus())
     return;
-  if(searchInput == document.activeElement)
+  if(inputHasFocus)
     return;
 
 
+
+  var shortcutsEls = [...document.getElementsByClassName("dom-shortcut")];
+  var shortcuts = {};
+  shortcutsEls.map(el=> console.log(el.dataset.shortcut,el.dataset.nodeId,el.dataset) );
+  shortcutsEls.map(el=> shortcuts[el.dataset.shortcut] = Node.makeById(el.dataset.nodeId) );
+  if(selectedMethod == 'resolvablesView' && shortcuts[e.key])
+  {
+    goToObject(shortcuts[e.key]);
+    return;
+  }
 
 
 
@@ -945,11 +988,24 @@ document.addEventListener('keydown', async e => {
     goToObject(_.first(Node.makeById('93a8def8').$('resolve')));
     return e.preventDefault();
   }
+  if(!c&&!s&& e.key == 'k')
+  {
+    goToObject(_kaielvin);
+    return e.preventDefault();
+  }
   if(!c&&!s&& e.key == 'f')
   {
     searchInput.focus();
     searchInput.value = '';
     onHeaderSearchChanged(false);
+    return e.preventDefault();
+  }
+  if(!c&& s&& e.key == 'F')
+  {
+    goToObject(_instanciable.$('collection'));
+    searchInput.focus();
+    searchInput.value = '';
+    onHeaderSearchChanged(true);
     return e.preventDefault();
   }
   if( c&&!s&& e.key == 'f')
@@ -980,15 +1036,16 @@ document.addEventListener('keydown', async e => {
   {
     if(selectedInstanciable == $$('collection'))
       goToObject(selectedNode.$('descriptor'));
-    if(selectedInstanciable == $$('uniqueBy') || selectedInstanciable == $$('sort'))
-      goToObject(selectedNode.$('in'));
-    if(selectedInstanciable == $$('accessorFrom') || selectedInstanciable == $$('descriptorFrom'))
+    if(selectedInstanciable == $$('accessorTo') || selectedInstanciable == $$('accessorFrom')
+      || selectedInstanciable == $$('uniqueBy') || selectedInstanciable == $$('sort'))
+      goToObject(selectedNode.$('in') || selectedNode.$('ins'));
+    if(selectedInstanciable == $$('descriptorFrom'))
       goToObject(selectedNode.$('to') || selectedNode.$('tos'));
     if(selectedInstanciable == $$('claimType'))
       goToObject(selectedNode.$('typeTo'));
     if(selectedInstanciable == $$('descriptorDifference'))
       goToObject(selectedNode.$('negative'));
-    if(selectedInstanciable == $$('accessorTo') || selectedInstanciable == $$('descriptorTo'))
+    if(selectedInstanciable == $$('descriptorTo'))
       goToObject(selectedNode.$('from') || selectedNode.$('froms'));
 
     return e.preventDefault();
@@ -1011,6 +1068,13 @@ document.addEventListener('keydown', async e => {
     e.preventDefault();
     await fetchNodesFromServer([selectedNode]);
     showObject(selectedNode);
+    return;
+  }
+  // if(!c&&!s&& e.key == 'ê')
+  if(!c&&!s&& e.key == 'à')
+  {
+    goToObject(selectedNode,selectedMethod == 'resolvablesView' ? undefined : 'resolvablesView');
+    e.preventDefault();
     return;
   }
 
@@ -1056,8 +1120,8 @@ document.addEventListener('keydown', async e => {
   if(!c&&!s&& e.key == '2' && options[2]) return window.location.href = options[2];
   if(!c&&!s&& e.key == '3' && options[3]) return window.location.href = options[3];
 
-
-  if(!c&&!s&& e.key.charCodeAt() >= '0'.charCodeAt() && e.key.charCodeAt() <= '9'.charCodeAt())
+  var digit =  e.key.charCodeAt() >= '0'.charCodeAt() && e.key.charCodeAt() <= '9'.charCodeAt();
+  if(!c&&!s&& digit)
   {
     var i = e.key.charCodeAt() - '0'.charCodeAt();
     var clipboard = Node.makeById('93a8def8').$('resolve');
@@ -1274,9 +1338,11 @@ var _content = document.getElementById("content");
 var selectedNode = _instanciable;
 var selectedInstanciable = _instanciable;
 var selectedMethod;
-var showObject = async (node,updateHash=true,paginating=false)=>
+var showObject = async (node,updateHash=true,skipFetch=false)=>
 {
   // clearHeaderSearch();
+
+  // console.log("showObject()", node instanceof Node ? node.name: JSON.stringify(node));
 
   // var method = 'object.simpleView';
   selectedMethod = undefined;
@@ -1296,6 +1362,13 @@ var showObject = async (node,updateHash=true,paginating=false)=>
   var hash = node.name;
   var instanciable = node.$('instanceOf');
   selectedInstanciable = instanciable;
+
+
+  if(!instanciable && !skipFetch)
+  {
+    await fetchNodesFromServer([node]);
+    return showObject(node,true,true);
+  }
 
   // var defaultMethod = instanciable && instanciable.$('defaultPageView') || 'simpleView';
   // var defaultMethod2 = node.$('object.defaultPageView');
@@ -1319,7 +1392,7 @@ var showObject = async (node,updateHash=true,paginating=false)=>
   // _content.appendChild(htmlToElement(  await Promise.resolve( $$(node,method) )  ));
   document.title = node.$('prettyString')+(instanciable?' • '+instanciable.$('prettyString'):'')+' • Public';
   _content.appendChild(htmlToElement(  html  ));
-  if(!paginating)
+  // if(!paginating)
   {
     // should trigger pageCollection()
     if(document.body.scrollTop != 0) window.scrollTo({top:0});
@@ -1540,8 +1613,10 @@ var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring
   loggedUser = $$('person').$froms('instanceOf').find(u=>u.$('title') == 'Kai Elvin');
   console.log("loggedUser",loggedUser&&loggedUser.$('title'));
 
-  garbageCollect();
-  
+  var _garbageCollect = ()=>garbageCollect([$$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching')]);
+  // setInterval(_garbageCollect, 10000);
+  // _garbageCollect();
+
   // var playlist = await fetchYoutubePlaylists('UCDDe2Yh15Yj4ljU_2f311mQ');
   // fetchYoutubePlaylist('PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ');
 
