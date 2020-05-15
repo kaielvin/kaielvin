@@ -430,18 +430,20 @@ class Claim
     // console.log(str);
     return hashHex(str);
   }
-  delete(skipRemovingFromNode=true)
-  {
-    if(!Claim.hideDeleteLogs) console.log("Claim.delete()",this.id,this.type.strid,this.idStr);
-    // this.deleted = true;
-    this.from.removeClaim(this);
-Claim.length = 0;
-    if(Claim.onNewClaim) Claim.onNewClaim(this,true);
-    // var id = this.id;
-    // delete Claim.idIndex[id];
-    Claim.mainClaimStore.removeClaim(this);
-    // Claim.deletedIdIndex[id] = this;
-  }
+  // delete(skipRemovingFromNode=true)
+  // {
+  //   if(!Claim.hideDeleteLogs) console.log("Claim.delete()",this.id,this.type.strid,this.idStr);
+  //   // this.deleted = true;
+  //   var removed = this.from.removeClaim(this);
+  //   if(removed) Claim.count--;
+  //   else return;
+
+  //   if(Claim.onNewClaim) Claim.onNewClaim(this,true);
+  //   // var id = this.id;
+  //   // delete Claim.idIndex[id];
+  //   // Claim.mainClaimStore.removeClaim(this);
+  //   // Claim.deletedIdIndex[id] = this;
+  // }
   toString()
   {
     return this.idStr;
@@ -452,24 +454,25 @@ if(SortedSet)
   Claim.fromTypeToSet = new SortedSet(undefined,function(c1,c2){return c1.equals(c2)},function(c1,c2){return c1.compareFromTypeDateToClaimer(c2)});
 
 
-Claim.mainClaimStore = new ClaimStore();
+// Claim.mainClaimStore = new ClaimStore();
 // Claim.deletedIdIndex = {};
 // Claim.idIndex = {};
-Claim.length = 0;
+Claim.count = 0;
 Claim.make = function(from_,type,to,claimer,date)
 {
   var claim = new Claim(from_,type,to,claimer,date);
   // var fromStore = Claim.mainClaimStore.getFromId(id);
   // if(fromStore) return fromStore;
-  var finalClaim = claim.from.addClaim(claim);
-  if(finalClaim != claim)
+  var result = claim.from.addClaim(claim);
+  if(result.alreadyIn)
   {
-    // console.log("Claim.make() already exists");
-    return finalClaim;
+    console.log("Claim.make() already exists");
+    return result.alreadyIn;
   }
-  Claim.length++;
-  var id = claim.id;
-  Claim.mainClaimStore._addClaim(claim,id);
+  Claim.count++;
+  // console.log("Claim.make() Claim.count++",Claim.count);
+  // var id = claim.id;
+  // Claim.mainClaimStore._addClaim(claim,id);
   // if(Claim.fromTypeToSet) Claim.fromTypeToSet.push(claim);
   if(Claim.onNewClaim) Claim.onNewClaim(claim);
   return claim;
@@ -481,6 +484,17 @@ Claim.make = function(from_,type,to,claimer,date)
   // if(Claim.onNewClaim) Claim.onNewClaim(claim);
   // return Claim.idIndex[id] = claim;
 }
+Claim.remove = function(claim) // by value
+{
+  // console.log("Claim.remove()",claim.id,claim.idStr);
+  if(!Claim.hideDeleteLogs) console.log("Claim.remove()",claim.id,claim.idStr);
+  var removed = claim.from.removeClaim(claim);
+  if(!removed) return false;
+  Claim.count--;
+  // console.log("Claim.remove() Claim.count--",Claim.count);
+  if(Claim.onNewClaim) Claim.onNewClaim(removed,true);
+  return true;
+}
 Claim.fromCompactJson = function(json)
 {
   var from_ = Node.makeById(json.f);
@@ -490,8 +504,14 @@ Claim.fromCompactJson = function(json)
             :                      json.t;
   var claimer = Node.makeById(json.c);
   var date = new Date(json.d);
+
+  if(json.del)
+  {
+    var claim = new Claim(from_,type,to,claimer,date);
+    return Claim.remove(claim);
+  }
+
   var claim = Claim.make(from_,type,to,claimer,date);
-  if(json.del) claim.delete();
   return claim;
 }
 
@@ -517,7 +537,7 @@ class Node
     var claim = Claim.make(this,type,to,Node.defaultUser); // will call this.addClaim() if needed
     // console.log("Node.setFromType()","claim",claim.id,claim.idStr);
   }
-  removeClaim(claim) // claim is expected to not be a duplicate, as returned by this.addClaim(claim,false)
+  removeClaim(claim)
   {
     return this.addClaim(claim,true);
   }
@@ -531,15 +551,22 @@ class Node
     {
       var lengthBefore = claims.length;
       // _.pull(claims,claim);
-      _.pullAllBy(claims,claim,c=>c.equals(claim)); // TODO optimise
+      // _.pullAllBy(claims,claim,c=>c.equals(claim)); // TODO optimise
+      var removed = _.remove(claims,c=>c.equals(claim)); // TODO optimise
+      // console.log("Node.removeClaim()","lengthBefore",lengthBefore,"claims.length",claims.length);
       if(lengthBefore == claims.length) return undefined; // nothing removed
-      if(claims.length == 0) delete this.typeTos[type.id];
+      if(claims.length == 0)
+      {
+        delete this.typeTos[type.id];
+        claims = undefined;
+      }
+      claim = removed[0]; // to use comparisons by reference instead of value below, and for returning the actual removed claim
     }
 
     if(!_remove && claims)
     {
-      var alreadyExistent = claims.find(c=>c.equals(claim)); // TODO optimize
-      if(alreadyExistent) return alreadyExistent;
+      var alreadyIn = claims.find(c=>c.equals(claim)); // TODO optimize
+      if(alreadyIn) return {alreadyIn};
     }
     if(!_remove)
     {
@@ -562,9 +589,10 @@ class Node
        && this.stridClaim == claim)
     {
       // console.log('Node.addClaim() _remove','REMOVE STRID',claim.to.s);
-      var claims = this.typeTos[_strid.id];
-      var previous = _.maxBy(claims,c=>c==claim?0:c.date.valueOf()) // excludes this claim
-      if(previous == claim) // was the only one removing strid data
+
+      // claim has been removed from claims already (undefined if empty)
+      var previous = !claims ? undefined : _.maxBy(claims,c=>c==c.date.valueOf())
+      if(!previous) // was the only one, removing strid data
       {
         delete _stridClaims[claim.to.s];
         delete this.strid;
@@ -787,12 +815,11 @@ class Node
   delete()
   {
     console.log("Node.delete()",this.id,this.strid,this.$('prettyString'));
-    const deleteClaim = function(claim){claim.delete()};
     for(var typeId in this.typeTos)
     {
       console.log("Node.delete()","toType",Node.makeById(typeId).strid,this.typeTos[typeId].length);
       var claims = [...this.typeTos[typeId]];
-      claims.forEach(deleteClaim);
+      claims.forEach(Claim.remove);
     }
     // leave them point to an empty node
     // they should be carbage collectable if this node is deleted anyway
@@ -1379,13 +1406,13 @@ function garbageCollect(extraGarbageCollectables=[])
   // var garbageCollectedClaims = _.values(Claim.idIndex).filter(claim=>!saveClaimMap[claim.id]);
   // var garbageCollectedClaims = Claim.mainClaimStore.getAll().filter(claim=>!saveClaimMap[claim.id]);
   var garbageCollectedClaims = [...Claim.makeOverallClaimIterator()].filter(claim=>!saveClaimMap[claim.id]);
-    console.log("garbageCollect() collecting",garbageCollectedClaims.length,"out of",Claim.mainClaimStore.length,'should be left',Claim.mainClaimStore.length-garbageCollectedClaims.length);
+    console.log("garbageCollect() collecting",garbageCollectedClaims.length,"out of",Claim.count,'should be left',Claim.count-garbageCollectedClaims.length);
   Claim.hideDeleteLogs = true;
-  garbageCollectedClaims.forEach(claim=>claim.delete());
+  garbageCollectedClaims.forEach(claim=>Claim.remove(claim));
   delete Claim.hideDeleteLogs;
 
   // garbageCollected.forEach(node=>node.delete());
-    console.log("garbageCollect() claims # after:",Claim.mainClaimStore.length);
+    console.log("garbageCollect() claims # after:",Claim.count);
 }
 
 

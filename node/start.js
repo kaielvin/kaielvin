@@ -237,7 +237,7 @@ if(loadingFromDisk)
   });
   delete Claim.hideDeleteLogs;
   if(loadingFullTextFromDisk) delete fulltextSearch.skipIndexing;
-  console.log("Claims loaded from disk.",'line count:',claims.length-1,'final count:',Claim.mainClaimStore.length,"duration",Date.now()-startTime);
+  console.log("Claims loaded from disk.",'line count:',claims.length-1,'final count:',Claim.count,"duration",Date.now()-startTime);
   // console.log("Claims loaded from disk.",'_stridClaims',_.mapValues(_stridClaims,c=>c.from.id),_.size(_stridClaims));
   console.log("Claims loaded from disk.",'_stridClaims',_.size(_stridClaims));
 
@@ -256,7 +256,9 @@ async function recompactClaimsOnDisk()
   streamC.close();
   var streamC2 = fs.createWriteStream("./claims.compact.jsonlist_tmp", {flags:'a',encoding: 'utf8'});
 
-  var claims = Claim.mainClaimStore.getAll(true);
+  // var claims = Claim.mainClaimStore.getAll(true);
+  var claims = [...Claim.makeOverallClaimIterator()];
+  claims = _.sortBy(claims,c=>c.date.valueOf());
   claims.forEach(claim=>
   {
     var compactJson = claim.toCompactJson();
