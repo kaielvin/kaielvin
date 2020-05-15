@@ -1346,7 +1346,6 @@ var showObject = async (node,updateHash=true,skipFetch=false)=>
 
   // var method = 'object.simpleView';
   selectedMethod = undefined;
-  if(!node) node = selectedNode;
   if(_.isString(node)) 
   {
     var split = node.split('/');
@@ -1357,18 +1356,26 @@ var showObject = async (node,updateHash=true,skipFetch=false)=>
     }
     node = resolveIntoNode(node);
   }
-  if(!node) node = selectedNode;
-  selectedNode = node;
-  var hash = node.name;
-  var instanciable = node.$('instanceOf');
-  selectedInstanciable = instanciable;
+  var instanciable = node && node.$('instanceOf');
 
 
-  if(!instanciable && !skipFetch)
+  // TODO handle asking the server for a unknown node without creating it here (just id?)
+  // console.log("showObject()",node&&node.id,!!instanciable);
+  if(node && !instanciable && !skipFetch)
   {
+    console.log("showObject()","node without instanciable, trying to fetch from server…");
     await fetchNodesFromServer([node]);
     return showObject(node,true,true);
   }
+
+  if(!node) 
+  {
+    node = selectedNode;
+    instanciable = node.$('instanceOf');
+  }
+  selectedNode = node;
+  selectedInstanciable = instanciable;
+  var hash = node.name;
 
   // var defaultMethod = instanciable && instanciable.$('defaultPageView') || 'simpleView';
   // var defaultMethod2 = node.$('object.defaultPageView');

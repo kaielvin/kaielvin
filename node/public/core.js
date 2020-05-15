@@ -2,6 +2,15 @@ var _ = _ || require('lodash'); // already defined on the frontend version
 var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
 var fetch = fetch || require("node-fetch");
 
+String.prototype.strcmp = function(s) {
+    return this < s ? -1 : +(this > s)
+}
+
+
+var SortedSet = require && require("collections/sorted-set");
+
+
+
 // used by JS methods in the graph to access server specific values and functions
 var ServerContext = {};
 
@@ -154,6 +163,148 @@ var willUpdateFullTextIndexForNode = node=>
 
 
 
+
+
+
+
+
+
+
+
+class ClaimStore
+{
+  constructor()
+  {
+    // this.claims = [];
+    // this.idPosIndex = {}; // used to remove quickly
+    this.idIndex = {};
+    this.addClaim = this.addClaim.bind(this);
+  }
+  get length()
+  {
+    // return this.claims.length;
+    return _.size(this.idIndex); // slow (add a counter if needed often)
+  }
+  getFromId(id)
+  {
+    return this.idIndex[id];
+  }
+  addClaim(claim)
+  {
+    var id = claim.id;
+    if(this.idIndex[id]) return this;
+    this.idIndex[id] = claim;
+    // this.idPosIndex[id] = this.claims.length;
+    // this.claims.push(claim);
+    return this;
+  }
+  _addClaim(claim,id=undefined) // no checking, faster
+  {
+    var id = id || claim.id;
+    this.idIndex[id] = claim;
+    // this.idPosIndex[id] = this.claims.length;
+    // this.claims.push(claim);
+    return this;
+  }
+  removeClaim(claim,id=undefined)
+  {
+    var id = id || claim.id;
+    var _claim = this.idIndex[id];
+    if(!_claim) return this;
+    // _.remove(this.claims,_claim);
+    // if(this.claims[this.idPosIndex[id]].id != id)
+      // console.error("ClaimStore.removeClaim()",'pos',this.idPosIndex[id],
+      //   "IDS",id,this.claims[this.idPosIndex[id]].id,
+      //   "idStrs",claim.idStr,this.claims[this.idPosIndex[id]].idStr);
+
+    // this.claims.splice(this.idPosIndex[id],1);
+    delete this.idIndex[id];
+    // delete this.idPosIndex[id];
+    return this;
+  }
+
+  addAllNodeClaims(node,includeFroms=false)
+  {
+    for(var typeId in node.typeTos)
+      node.typeTos[typeId].forEach(this.addClaim);
+    if(includeFroms)
+    for(var typeId in node.typeFroms)
+    {
+      var perFromClaims = node.typeFroms[typeId];
+      for(var fromId in perFromClaims)
+        perFromClaims[fromId].forEach(this.addClaim);
+    }
+  }
+  getAll(sortedByDate=false)
+  {
+    var claims = _.values(this.idIndex);
+    if(sortedByDate) claims = _.sortBy(claims,c=>c.date.valueOf());
+    return claims;
+  }
+  toCompactJson()
+  {
+    var claimJsons = [];
+    var lastClaimJsons = {d:0};
+    var values = [];
+    var valuesMap = {};
+    var makeValueId = value=>
+    {
+      var str = _.isString(value) ? value : JSON.stringify(value);
+      var id = valuesMap[str];
+      if(id !== undefined) return id;
+      id = valuesMap[str] = values.length;
+      values.push(value);
+      return id;
+    }
+    // TODO could order to compact better.
+    // trusting the default order for now.
+    // chronological order is slightly better, activated for now
+    var claims = this.getAll(true);
+    for(var claim of claims)
+    {
+      var claimJson = claim.toCompactJson();
+      claimJson.f = makeValueId(claimJson.f);
+      claimJson.T = makeValueId(claimJson.T);
+      claimJson.t = makeValueId(claimJson.t);
+      claimJson.c = makeValueId(claimJson.c);
+      
+      if(claimJson.f === lastClaimJsons.f) delete claimJson.f;
+      else lastClaimJsons.f = claimJson.f;
+      if(claimJson.T === lastClaimJsons.T) delete claimJson.T;
+      else lastClaimJsons.T = claimJson.T;
+      if(_.isEqual(claimJson.t,lastClaimJsons.t)) delete claimJson.t;
+      else lastClaimJsons.t = claimJson.t;
+      if(claimJson.c === lastClaimJsons.c) delete claimJson.c;
+      else lastClaimJsons.c = claimJson.c;
+      if(claimJson.d === lastClaimJsons.d) delete claimJson.d;
+      else
+      {
+        var lastDate = claimJson.d;
+        // diff is shorter
+        claimJson.d-= lastClaimJsons.d;
+        lastClaimJsons.d = lastDate;
+      }
+
+      claimJsons.push(claimJson);
+    }
+    return {claims:claimJsons,values,v:1};
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class Claim
 {
   constructor(from_,type,to,claimer,date)
@@ -168,6 +319,85 @@ class Claim
     this.date = date || new Date();
 
     Object.freeze(this);
+  }
+  equals(c2)
+  {
+    if(c2.from != this.from) return false;
+    if(c2.type != this.type) return false;
+    if(c2.to.j && this.to.j)
+    {
+      if(c2.to.j.toString() != this.to.j.toString()) return false;
+    }
+    else
+    {
+      if(!_.isEqual(c2.to,this.to)) return false;
+    }
+    if(c2.date.valueOf() != this.date.valueOf()) return false;
+    if(c2.claimer != this.claimer) return false;
+    return true;
+  }
+  compareFromTypeDateToClaimer(c2)
+  {
+    if(Claim.compareCounter != undefined) Claim.compareCounter++;
+    var f1 = this.from;
+    var f2 = c2.from;
+    if(f1 != f2) return f1.id>f2.id ? +1 : -1;
+    var T1 = this.type;
+    var T2 = c2.type;
+    if(T1 != T2) return T1.id>T2.id ? +1 : -1;
+    var d1 = this.date.valueOf();
+    var d2 = c2.date.valueOf();
+    if(d1 != d2) return d1>d2 ? +1 : -1;
+    var t1 = this.to;
+    var t2 = c2.to;
+    if(t1 !== t2) // same pointers, skip comparing values
+    {
+      var t1N = t1 instanceof Node;
+      var t2N = t2 instanceof Node;
+      if(t1N && t2N)
+      {
+        if(t1 != t2) return t1.id>t2.id ? +1 : -1;
+      }
+      else
+      {
+        // nodes, then primitive values
+        if(t1N) return -1; 
+        if(t2N) return +1;
+        var t1Type;
+        var t2Type;
+        for(var k in t1){ t1Type = k; break; }
+        for(var k in t2){ t2Type = k; break; }
+        // sort by primitive type string key, arbitrarily
+        if(t1Type != t2Type) return t1Type.strcmp(t2Type);
+        switch(t1Type)
+        {
+          case 's':
+            if(t1.s != t2.s) return t1.s>t2.s ? +1 : -1;
+            break;
+          case 'u':
+            if(t1.u != t2.u) return t1.u>t2.u ? +1 : -1; // TODO check this
+            break;
+          case 'n':
+            if(t1.n != t2.n) return t1.n>t2.n ? +1 : -1;
+            break;
+          case 'j':
+            if(t1.j === t2.j) break;
+            var j1 = t1.j.toString();
+            var j2 = t2.j.toString();
+            if(j1 != j2) return j1>j2 ? +1 : -1;
+            // throw new Error('j not supported yet');
+            break;
+        }
+      }
+    }
+    // to values are presumably equal by now
+
+    var c1 = this.claimer;
+    var c2 = c2.claimer;
+    if(c1 != c2) return c1.id>c2.id ? +1 : -1;
+
+    // Equal!
+    return 0;
   }
   toCompactJson()
   {
@@ -205,23 +435,51 @@ class Claim
     if(!Claim.hideDeleteLogs) console.log("Claim.delete()",this.id,this.type.strid,this.idStr);
     // this.deleted = true;
     this.from.removeClaim(this);
+Claim.length = 0;
     if(Claim.onNewClaim) Claim.onNewClaim(this,true);
-    var id = this.id;
-    delete Claim.idIndex[id];
+    // var id = this.id;
+    // delete Claim.idIndex[id];
+    Claim.mainClaimStore.removeClaim(this);
     // Claim.deletedIdIndex[id] = this;
   }
+  toString()
+  {
+    return this.idStr;
+  }
 }
+
+if(SortedSet)
+  Claim.fromTypeToSet = new SortedSet(undefined,function(c1,c2){return c1.equals(c2)},function(c1,c2){return c1.compareFromTypeDateToClaimer(c2)});
+
+
+Claim.mainClaimStore = new ClaimStore();
 // Claim.deletedIdIndex = {};
-Claim.idIndex = {};
+// Claim.idIndex = {};
+Claim.length = 0;
 Claim.make = function(from_,type,to,claimer,date)
 {
   var claim = new Claim(from_,type,to,claimer,date);
+  // var fromStore = Claim.mainClaimStore.getFromId(id);
+  // if(fromStore) return fromStore;
+  var finalClaim = claim.from.addClaim(claim);
+  if(finalClaim != claim)
+  {
+    // console.log("Claim.make() already exists");
+    return finalClaim;
+  }
+  Claim.length++;
   var id = claim.id;
-  var fromIndex = Claim.idIndex[id];
-  if(fromIndex) return fromIndex; // already indexed
-  claim.from.addClaim(claim);
+  Claim.mainClaimStore._addClaim(claim,id);
+  // if(Claim.fromTypeToSet) Claim.fromTypeToSet.push(claim);
   if(Claim.onNewClaim) Claim.onNewClaim(claim);
-  return Claim.idIndex[id] = claim;
+  return claim;
+
+  // var id = claim.id;
+  // var fromIndex = Claim.idIndex[id];
+  // if(fromIndex) return fromIndex; // already indexed
+  // claim.from.addClaim(claim);
+  // if(Claim.onNewClaim) Claim.onNewClaim(claim);
+  // return Claim.idIndex[id] = claim;
 }
 Claim.fromCompactJson = function(json)
 {
@@ -259,13 +517,39 @@ class Node
     var claim = Claim.make(this,type,to,Node.defaultUser); // will call this.addClaim() if needed
     // console.log("Node.setFromType()","claim",claim.id,claim.idStr);
   }
-  removeClaim(claim)
+  removeClaim(claim) // claim is expected to not be a duplicate, as returned by this.addClaim(claim,false)
   {
-    this.addClaim(claim,true);
+    return this.addClaim(claim,true);
   }
   addClaim(claim,_remove=false)
   {
     var {type,to} = claim; // claim.from should be this
+
+    var claims = this.typeTos[type.id];
+    if(_remove && !claims) return undefined; // nothing to remove
+    if(_remove)
+    {
+      var lengthBefore = claims.length;
+      // _.pull(claims,claim);
+      _.pullAllBy(claims,claim,c=>c.equals(claim)); // TODO optimise
+      if(lengthBefore == claims.length) return undefined; // nothing removed
+      if(claims.length == 0) delete this.typeTos[type.id];
+    }
+
+    if(!_remove && claims)
+    {
+      var alreadyExistent = claims.find(c=>c.equals(claim)); // TODO optimize
+      if(alreadyExistent) return alreadyExistent;
+    }
+    if(!_remove)
+    {
+      if(!claims) claims = this.typeTos[type.id] = [];
+      // claim.sameTosClaims = claims;
+      claims.push(claim);
+    }
+
+
+
     if(to && to.s) willUpdateFullTextIndexForNode(this);
 
     // if(type == _strid && to && to.s)
@@ -310,11 +594,6 @@ class Node
     }
 
 
-    var claims = this.typeTos[type.id];
-    if(!claims) claims = this.typeTos[type.id] = [];
-    // claim.sameTosClaims = claims;
-    if(!_remove) claims.push(claim);
-    else _.pull(claims,claim);
 
     // add this to the new to's typeFroms index
     if(to instanceof Node)
@@ -349,6 +628,17 @@ class Node
       // froms.push(this);
     }
     // if(Node.printoutInserts) console.log(_.padEnd(this.name,25),_.padEnd(type.name,15),valueToString(to).substring(0,40));
+
+    return claim;
+  }
+
+  * makeClaimIterator()
+  {
+    for(var typeId in this.typeTos)
+    {
+      var claims = this.typeTos[typeId];
+      for(var claim of claims) yield claim;
+    }
   }
 
   getFromType_nodes(type,unique=true,byDate=true)
@@ -522,6 +812,8 @@ class Node
 }
 
 
+Node.zero = new Node("00000000");
+Node.one  = new Node("ffffffff");
 
 var _idToNodeIndex = {};
 Node.makeById = id=>
@@ -530,10 +822,31 @@ Node.makeById = id=>
   if(node) return node;
   return _idToNodeIndex[id] = new Node(id);
 }
+Node.makeByStrid = strid=>
+{
+  var stridClaim = _stridClaims[strid];
+  if(stridClaim) return stridClaim.from;
+  var node = Node.make();
+  node.setFromType(_strid,{s:strid});
+  return node;
+}
+Node.getById = id=>
+{
+  return _idToNodeIndex[id];
+}
 Node.make = ()=> Node.makeById(randHex());
 
 var _stridClaims = {};
 
+function * makeOverallClaimIterator()
+{
+  for(var nodeId in _idToNodeIndex)
+  {
+    var nodeClaimIterator = _idToNodeIndex[nodeId].makeClaimIterator();
+    for(var claim of nodeClaimIterator) yield claim;
+  }
+}
+Claim.makeOverallClaimIterator = makeOverallClaimIterator;
 
 
 
@@ -873,6 +1186,8 @@ function makeUnique(typeTos)
   var toCountPerType = {};
   nodeTypeTos.forEach(o=>
   {
+    if(!o.to) throw new Error("undefined 'to' given to makeUnique(). "+"type="+(o.type&&o.type.name));
+    if(!o.type) throw new Error("undefined 'type' given to makeUnique(). "+"to="+(o.to&&o.to.name));
     toCountPerType[o.type.id] = (toCountPerType[o.type.id]||0)+1;
     o.count = o.to.getToType_fromsCount(o.type);
   });
@@ -928,97 +1243,21 @@ function makeUnique(typeTos)
 
     // console.log('makeUnique()','uniques.length',uniques.length,uniques.length&&$$(uniques[0],'object.prettyString'));
   // one or more found
-  if(uniques.length > 0) return uniques[0];
+  if(uniques.length > 0)
+  {
+    makeUnique.justCreated = false;
+    return uniques[0];
+  }
 
   // else create one
   var unique = Node.make();
   typeTos.forEach(([type,to])=>$$(unique,type,to));
+  makeUnique.justCreated = true;
   return unique;
 }
 
 
 
-class ClaimStore
-{
-  constructor()
-  {
-    this.claims = [];
-    this.idIndex = {};
-    this.addClaim = this.addClaim.bind(this);
-  }
-  get length()
-  {
-    return this.claims.length;
-  }
-  addClaim(claim)
-  {
-    var id = claim.id;
-    if(this.idIndex[id]) return this;
-    this.idIndex[id] = claim;
-    this.claims.push(claim);
-    return this;
-  }
-  addAllNodeClaims(node,includeFroms=false)
-  {
-    for(var typeId in node.typeTos)
-      node.typeTos[typeId].forEach(this.addClaim);
-    if(includeFroms)
-    for(var typeId in node.typeFroms)
-    {
-      var perFromClaims = node.typeFroms[typeId];
-      for(var fromId in perFromClaims)
-        perFromClaims[fromId].forEach(this.addClaim);
-    }
-  }
-  toCompactJson()
-  {
-    var claimJsons = [];
-    var lastClaimJsons = {d:0};
-    var values = [];
-    var valuesMap = {};
-    var makeValueId = value=>
-    {
-      var str = _.isString(value) ? value : JSON.stringify(value);
-      var id = valuesMap[str];
-      if(id !== undefined) return id;
-      id = valuesMap[str] = values.length;
-      values.push(value);
-      return id;
-    }
-    // TODO could order to compact better.
-    // trusting the default order for now.
-    // chronological order is slightly better, but not worth the trouble
-    // this.claims = _.sortBy(this.claims,c=>c.date.valueOf());
-    for(var claim of this.claims)
-    {
-      var claimJson = claim.toCompactJson();
-      claimJson.f = makeValueId(claimJson.f);
-      claimJson.T = makeValueId(claimJson.T);
-      claimJson.t = makeValueId(claimJson.t);
-      claimJson.c = makeValueId(claimJson.c);
-      
-      if(claimJson.f === lastClaimJsons.f) delete claimJson.f;
-      else lastClaimJsons.f = claimJson.f;
-      if(claimJson.T === lastClaimJsons.T) delete claimJson.T;
-      else lastClaimJsons.T = claimJson.T;
-      if(_.isEqual(claimJson.t,lastClaimJsons.t)) delete claimJson.t;
-      else lastClaimJsons.t = claimJson.t;
-      if(claimJson.c === lastClaimJsons.c) delete claimJson.c;
-      else lastClaimJsons.c = claimJson.c;
-      if(claimJson.d === lastClaimJsons.d) delete claimJson.d;
-      else
-      {
-        var lastDate = claimJson.d;
-        // diff is shorter
-        claimJson.d-= lastClaimJsons.d;
-        lastClaimJsons.d = lastDate;
-      }
-
-      claimJsons.push(claimJson);
-    }
-    return {claims:claimJsons,values,v:1};
-  }
-}
 
 function importClaims(compactJson)
 {
@@ -1072,10 +1311,7 @@ function garbageCollect(extraGarbageCollectables=[])
   {
     if(instanciableClaimTypes[instanciable.id])
       return instanciableClaimTypes[instanciable.id];
-    return instanciableClaimTypes[instanciable.id] = _.concat(
-        instanciable.$froms(_typeFrom),
-        _object.$froms(_typeFrom)
-      )
+    return instanciableClaimTypes[instanciable.id] = instanciable.$froms(_typeFrom)
       .filter(claimType=>claimType.$(_functional) != _true);
   }
   var saveClaimMap = {};
@@ -1085,24 +1321,43 @@ function garbageCollect(extraGarbageCollectables=[])
     if(!node) return;
     if(saveNodeMap[node.id]) return; // saved already
     saveNodeMap[node.id] = node;
-    instanciable = instanciable || node.$(_instanceOf);
-    if(!instanciable) console.error ("Node without instanciable",node.id);
-    var claimTypes = getClaimTypes(instanciable || _object);
-    for(var type of claimTypes)
+    var classes = instanciable ? instanciable.$(_supClasses) : node.$(_classes);
+    if(classes.length <= 1) console.error ("Node with only one class",node.id,node.name,classes.map(c=>c.name).join());
+
+    for(var class_ of classes)
     {
-      // var multipleValues = claimType.$(_multipleValues) == _true;
-      var claims = node.typeTos[type.id];
-      if(claims)
-      for(var claim of claims)
+      var claimTypes = getClaimTypes(class_);
+      for(var type of claimTypes)
       {
-        saveClaimMap[claim.id] = claim;
-        if(claim.to instanceof Node)
-          saveNode(claim.to);
+        var claims = node.typeTos[type.id];
+        if(claims)
+        for(var claim of claims)
+        {
+          saveClaimMap[claim.id] = claim;
+          if(claim.to instanceof Node)
+            saveNode(claim.to);
+        }
       }
     }
+
+    // instanciable = instanciable || node.$(_instanceOf);
+    // if(!instanciable) console.error ("Node without instanciable",node.id,node.name);
+    // var claimTypes = getClaimTypes(instanciable || _object);
+    // for(var type of claimTypes)
+    // {
+    //   // var multipleValues = claimType.$(_multipleValues) == _true;
+    //   var claims = node.typeTos[type.id];
+    //   if(claims)
+    //   for(var claim of claims)
+    //   {
+    //     saveClaimMap[claim.id] = claim;
+    //     if(claim.to instanceof Node)
+    //       saveNode(claim.to);
+    //   }
+    // }
   }
 
-  [_object,_undefined,_anything].forEach(node=>saveNode(node));
+  [_object,_undefined,_anything,_class,_abstractClass].forEach(node=>saveNode(node));
 
   for(var instanciable of keptInstanciables)
   {
@@ -1116,17 +1371,21 @@ function garbageCollect(extraGarbageCollectables=[])
   }
 
   var garbageCollected = _.values(_idToNodeIndex).filter(node=>!saveNodeMap[node.id]);
+  for(var node of garbageCollected)
+    if(!garbageCollectables.includes(node.$(_instanceOf))) console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
   // for(var node of garbageCollected)
-  //   console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
+  //   if(node.strid) console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
 
-  var garbageCollectedClaims = _.values(Claim.idIndex).filter(claim=>!saveClaimMap[claim.id]);
-    console.log("garbageCollect() collecting",garbageCollectedClaims.length,"out of",_.size(Claim.idIndex));
+  // var garbageCollectedClaims = _.values(Claim.idIndex).filter(claim=>!saveClaimMap[claim.id]);
+  // var garbageCollectedClaims = Claim.mainClaimStore.getAll().filter(claim=>!saveClaimMap[claim.id]);
+  var garbageCollectedClaims = [...Claim.makeOverallClaimIterator()].filter(claim=>!saveClaimMap[claim.id]);
+    console.log("garbageCollect() collecting",garbageCollectedClaims.length,"out of",Claim.mainClaimStore.length,'should be left',Claim.mainClaimStore.length-garbageCollectedClaims.length);
   Claim.hideDeleteLogs = true;
   garbageCollectedClaims.forEach(claim=>claim.delete());
   delete Claim.hideDeleteLogs;
 
   // garbageCollected.forEach(node=>node.delete());
-    console.log("garbageCollect() claims # after:",_.size(Claim.idIndex));
+    console.log("garbageCollect() claims # after:",Claim.mainClaimStore.length);
 }
 
 
@@ -1134,4 +1393,5 @@ module.exports = {ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,
-  garbageCollect,};
+  garbageCollect,
+_stridClaims,};

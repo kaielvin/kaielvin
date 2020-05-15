@@ -1,10 +1,37 @@
 /*
+
+pm2 logs 0 &
+pm2 restart 0
+
+
 c /home/kai/projects/20.03.25_Public2/node/
 node start.js
+
+instanciable subClassOf class
+{"f":"ce0b87e4","T":"2c90c5b8","t":"7ee96d65","c":"d086fe37","d":1589110147964}
 
 
 */
 
+
+var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
+
+var _ = require('lodash');
+var {ServerContext,fulltextSearch,resetFulltextSearchObject,
+  randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
+  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
+  ClaimStore,importClaims,
+  garbageCollect,_stridClaims} = require('./public/core.js');
+
+const fetch = require("node-fetch");
+var fs = require('fs');
+const {promisify} = require('util');
+var fss = {};
+fss.readdir = promisify(fs.readdir);
+fss.readFile = promisify(fs.readFile);
+fss.writeFile = promisify(fs.writeFile);
+fss.rename = promisify(fs.rename);
+var exec = promisify(require('child_process').exec);
 
 var Promises = {};
 Promises.wait = ms => new Promise((r, j)=>setTimeout(r, ms))
@@ -100,24 +127,43 @@ Promises.WorkerPool = WorkerPool;
 
 
 
-var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
 
 
 
-var _ = require('lodash');
-var {ServerContext,fulltextSearch,resetFulltextSearchObject,
-  randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
-  _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
-  ClaimStore,importClaims,
-  garbageCollect,} = require('./public/core.js');
 
-const fetch = require("node-fetch");
-var fs = require('fs');
-const {promisify} = require('util');
-var fss = {};
-fss.readdir = promisify(fs.readdir);
-fss.readFile = promisify(fs.readFile);
-fss.writeFile = promisify(fs.writeFile);
+
+
+
+
+
+
+
+
+
+
+/*
+
+Import timing:
+reading the file: 500
+parsing json: +1000
+turning into nodes and claims: +1150 (nodes are indexed for uniqueness, claims aren't, although not indexing makes little difference) (eval(js) takes +250)
+indexing into ClaimStore (hashish): +250
+indexing into SortedSet: +600
+indexing claims into nodes: +700 (maps of maps of arrays, from-type and type-from) 
+
+
+*/
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -148,6 +194,7 @@ if(loadingFullTextFromDisk)
   console.log("Loading fullTextIndex from disk…");
   var fulltextSearchCacheStr = fs.readFileSync(fulltextSearchCache,{encoding:'utf8'});
   var {fullTextOptions,fullText,documents} = JSON.parse(fulltextSearchCacheStr);
+  console.log("Loading fullTextIndex from disk…",'loaded JSON.');
   fulltextSearch = MiniSearch.loadJSON(JSON.stringify(fullText),fullTextOptions);
   fulltextSearch.__options = fullTextOptions;
   fulltextSearch.documentById = documents;
@@ -161,14 +208,20 @@ fulltextSearch.onDocAdded = persistFullTextIndexDebounced;
 
 
 
-var loadingFromDisk = fs.existsSync("./claims.jsonlist");
+var loadingFromDisk = fs.existsSync("./claims.compact.jsonlist");
 if(loadingFromDisk)
 {
+  var startTime = Date.now();
+  console.log("Loading claims from disk…");
+
   if(loadingFullTextFromDisk) fulltextSearch.skipIndexing = true;
   Claim.hideDeleteLogs = true;
-  var claimsStr = fs.readFileSync("./claims.jsonlist",{encoding:'utf8'});
-  var claims = claimsStr.split('\n').map((line,i)=>
+  var claimsStr = fs.readFileSync("./claims.compact.jsonlist",{encoding:'utf8'});
+  var claims = claimsStr.split('\n');
+  console.log("Loading claims from disk…",'line count:',claims.length-1);
+  claims = claims.map((line,i)=>
   {
+    if(i%40000==39999) console.log("Loading claims from disk…",Math.round(i/claims.length*100)+'% …');
     if(line.length == 0)return;
     try
     {
@@ -176,7 +229,7 @@ if(loadingFromDisk)
     }
     catch(e)
     {
-      throw new Error("Problem parsing line "+(i+1)+" "+e.message+" LINE="+line);
+      throw new Error("Problem parsing line "+(i+1)+" "+e.message+" LINE="+line+"\nError's stack: "+e.stack);
     }
     
     // claim.from.addClaim(claim); // might not know about multipleValues on time
@@ -184,1042 +237,72 @@ if(loadingFromDisk)
   });
   delete Claim.hideDeleteLogs;
   if(loadingFullTextFromDisk) delete fulltextSearch.skipIndexing;
-  console.log("Claims loaded from disk.","Claim count",claims.length-1);
+  console.log("Claims loaded from disk.",'line count:',claims.length-1,'final count:',Claim.mainClaimStore.length,"duration",Date.now()-startTime);
+  // console.log("Claims loaded from disk.",'_stridClaims',_.mapValues(_stridClaims,c=>c.from.id),_.size(_stridClaims));
+  console.log("Claims loaded from disk.",'_stridClaims',_.size(_stridClaims));
+
+
 }
 
 // .jsonlist : 1 json object per line (in this case, one claim as .toCompactJson() per line)
-var stream = fs.createWriteStream("./claims.jsonlist", {flags:'a',encoding: 'utf8'});
-Claim.onNewClaim = (claim,remove=false)=>
+var stream  = fs.createWriteStream("./claims.jsonlist",         {flags:'a',encoding: 'utf8'});
+var streamC = fs.createWriteStream("./claims.compact.jsonlist", {flags:'a',encoding: 'utf8'});
+var recompactingLock;
+async function recompactClaimsOnDisk()
 {
+  console.log("recompactClaimsOnDisk()","...");
+  recompactingLock = Promises.resolvablePromise();
+
+  streamC.close();
+  var streamC2 = fs.createWriteStream("./claims.compact.jsonlist_tmp", {flags:'a',encoding: 'utf8'});
+
+  var claims = Claim.mainClaimStore.getAll(true);
+  claims.forEach(claim=>
+  {
+    var compactJson = claim.toCompactJson();
+    var line = JSON.stringify(compactJson) + "\n";
+    streamC2.write(line);
+  });
+  streamC2.close();
+  await fss.rename("./claims.compact.jsonlist_tmp","./claims.compact.jsonlist");
+  streamC = fs.createWriteStream("./claims.compact.jsonlist", {flags:'a',encoding: 'utf8'});
+
+  console.log("recompactClaimsOnDisk()",".");
+  recompactingLock.resolve();
+  recompactingLock = undefined;
+}
+
+Claim.onNewClaim = async (claim,remove=false)=>
+{
+  if(recompactingLock) await recompactingLock;
   // if(!remove) console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
   var compactJson = claim.toCompactJson();
   if(remove) compactJson.del = true;
-  stream.write(JSON.stringify(compactJson) + "\n");
+  var line = JSON.stringify(compactJson) + "\n";
+  stream .write(line);
+  streamC.write(line);
 }
+var _kaielvin = $$('kaielvin');
 
 
-if(!loadingFromDisk)
-{
-  Node.initCore();
 
-  $$('instanciable (instanciable)');
-  $$('jsMethod instanciable.make');
-  $$('boolean (instanciable)');
-  $$('true (boolean)');
-  $$('false (boolean)');
 
 
 
-  $$('string object.strid');
-  $$('instanciable object.instanceOf');
 
-  $$('primitive (instanciable)');
-  $$('string (primitive)');
-  $$('number (primitive)');
-  $$('jsMethod (primitive)');
 
-  $$('person (instanciable)');
-  $$('string person.title');
-  $$('kaielvin').$(_instanceOf,'person').$('title',{s:'Kai Elvin'});
 
-  // $$('claimType > typeFromOne > object');
-  $$('instanciable claimType.typeFrom');
-  $$('anything     claimType.typeTo');
-  $$('boolean      claimType.multipleValues');
-  $$('boolean      claimType.functional');
-  $$('anything     claimType.defaultValue');
-  $$('jsMethod     claimType.resolve');
 
-  $$('string instanciable.defaultPageView');
-  $$('instanciable.defaultPageView','defaultValue',{s:'simpleView'});
 
 
-  $$('string object.prettyString',o=>
-  {
-    // var instanciable = o.getFromType_node(_instanceOf);
-    // var instanciableMethod = instanciable && stridToNode(instanciable.name+'.prettyString');
-    // return instanciableMethod && $$(o,instanciableMethod) || o.getFromType_string($$('person.name')) || o.name;
 
-    var title = $$(o,'title');
-    return title || o.name;
-  });
-  $$('string object.link',o=>'<a href="#'+o.name+'">'+$$(o,'prettyString')+'</a>');
 
 
-  $$('string object.htmlSmallDescription',function()
-  {
-    var instanciable = this.getFromType_node(_instanceOf);
-    var instanciableMethod = instanciable && stridToNode(instanciable.name+'.htmlSmallDescription');
-    // console.log("object.htmlSmallDescription()","instanciableMethod",instanciable.name+'.htmlSmallDescription',instanciableMethod);
-    return $$(this,instanciableMethod || 'object.link')
-  });
 
 
-  $$('string object.rowView',function()
-  {
-    return '<div class="rowView">'
-        +'<div>'
-          +'<div class="title">'+this.$('htmlSmallDescription')+'</div>'
-          +'<div class="subtitle">'+this.$('instanceOf').$('htmlSmallDescription')+'</div>'
-          +'<div class="tags">'+this.$('tags').map(tag=>tag.$('htmlSmallDescription')).join(', ')+'</div>'
-        +'</div>'
-      +'</div>';
-  });
 
 
-  $$('string object.simpleView',function()
-  {
-    console.log("object.simpleView()","id",this.id);
 
-    var instanciable = this.getFromType_node(_instanceOf);
-
-    console.log("object.simpleView()","instanciable",instanciable&&instanciable.name);
-
-
-    var instanciableFromTypes = instanciable &&
-      instanciable.getToType_froms($$('claimType.typeFrom'))
-      || [];
-
-    var objectFromTypes = _object.getToType_froms($$('claimType.typeFrom'));
-    _.pullAll(objectFromTypes,instanciableFromTypes);
-
-    var otherFromTypes = this.getFrom_types();
-    _.pullAll(otherFromTypes,instanciableFromTypes);
-    _.pullAll(otherFromTypes,objectFromTypes);
-
-    var fromTypeToLi = type=>
-      $$(makeUnique([
-          [_instanceOf,"descriptorTo"],
-          ['descriptorTo.from',this],
-          ['descriptorTo.type',type],
-        ]),'descriptorTo.htmlList');
-
-
-    var instanciableToTypes = instanciable &&
-      instanciable.getToType_froms($$('claimType.typeTo'))
-      || [];
-
-    var objectToTypes = _object.getToType_froms($$('claimType.typeTo'));
-    _.pullAll(objectToTypes,instanciableToTypes);
-
-    var otherToTypes = this.getTo_types();
-    _.pullAll(otherToTypes,instanciableToTypes);
-    _.pullAll(otherToTypes,objectToTypes);
-
-    var toTypeToLi = type=>
-      $$(makeUnique([
-          [_instanceOf,"descriptorFrom"],
-        ['descriptorFrom.to',this],
-        ['descriptorFrom.type',type],
-        ]),'descriptorFrom.htmlList');
-
-    var elements = [];
-    elements.push('<h1>'+$$(this,'prettyString')+'</h1>');
-
-    if(instanciable)
-    {
-      var descriptor = makeUnique([
-        [_instanceOf,"descriptorFrom"],
-        ['descriptorFrom.to',this],
-        ['descriptorFrom.type',_instanceOf],
-      ]);
-
-      elements.push('<div>instance of: '+$$(instanciable,'object.link')
-          +(instanciable == _instanciable ? ' <span class="link" onclick="createInDescriptor($$(\''+descriptor.id+'\'))">[new]</span>' : '')
-        +'</div><br/>');
-    }
-
-    elements.push((instanciableFromTypes.length > 0 || instanciableToTypes.length > 0)
-      && '<div>as '+$$(instanciable,'object.link')+':</div>');
-    elements.push(instanciableFromTypes.length > 0
-      && '<ul>'+instanciableFromTypes.map(fromTypeToLi).join('')+'</ul>');
-    elements.push(instanciableToTypes.length > 0
-      && '<ul>'+instanciableToTypes.map(toTypeToLi).join('')+'</ul>');
-
-    elements.push((objectFromTypes.length > 0 || objectToTypes.length > 0)
-      && '<div>as '+$$(_object,'object.link')+':</div>');
-    elements.push(objectFromTypes.length > 0
-      && '<ul>'+objectFromTypes.map(fromTypeToLi).join('')+'</ul>');
-    elements.push(objectToTypes.length > 0
-      && '<ul>'+objectToTypes.map(toTypeToLi).join('')+'</ul>');
-
-    elements.push((otherFromTypes.length > 0 || otherToTypes.length > 0)
-      && '<div>others:</div>');
-    elements.push(otherFromTypes.length > 0
-      && '<ul>'+otherFromTypes.map(fromTypeToLi).join('')+'</ul>');
-    elements.push(otherToTypes.length > 0
-      && '<ul>'+otherToTypes.map(toTypeToLi).join('')+'</ul>');
-
-    if(instanciable && instanciable == _instanciable)
-    {
-        elements.push('<h2>Instances:</h2>');
-        elements.push('<div class="items-row">'+this.$froms('instanceOf').map(item=>$$(item,'rowView')).join('')+'</div>');
-    }
-
-
-    elements = elements.filter(_.identity);
-    return '<div>'
-        +elements.join('\n');
-      +'</div>';
-  });
-
-
-  $$('object    descriptorTo.from');
-  $$('claimType descriptorTo.type');
-  $$('anything  descriptorTo.resolve',o=>
-  {
-    var type = o.getFromType_node($$('descriptorTo.type'));
-    if(!type) return undefined;
-    var from_ = o.getFromType_node($$('descriptorTo.from'));
-    if(!from_) return undefined;
-    if($$(type,'multipleValues') == $$('true'))
-    {
-      return from_.getFromType_nodes(type);
-    }
-    return from_.getFromType_to(type);
-  });
-  $$('object    descriptorTo.insert',function(value)
-  {
-    var type = o.getFromType_node($$('descriptorTo.type'));
-    if(!type) return undefined;
-    var from_ = o.getFromType_node($$('descriptorTo.from'));
-    if(!from_) return undefined;
-    $$(from_,type,value);
-    return from_;
-  });
-  $$('string    descriptorTo.htmlList',o=>
-  {
-    var type = $$(o,'descriptorTo.type');
-    var functional = type.getFromType_boolean($$('claimType.functional'));
-    var toType = $$(type,'claimType.typeTo');
-    var to = $$(o,'descriptorTo.resolve');
-    // var to = !functional && $$(o,'descriptorTo.resolve');
-    to = _.isArray(to)
-      ? $$('objectsToHtml','js') (to)
-      : valueToHtml(to);
-    return '<li>'
-      +$$(type,'object.link')
-      +_.escape(' > ')
-      + (functional
-        ? to
-        : to
-          +(  (toType === $$("string"))
-            ? ' <span class="link" onclick="editStringDescriptor($$(\''+o.id+'\'))">[edit]</span>'
-            : (toType === $$("jsMethod"))
-            ? ' <span class="link" onclick="editJavascriptDescriptor($$(\''+o.id+'\'))">[edit-JS]</span>'
-            : ' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
-          )
-      )
-      +'</li>'
-  });
-  $$('string descriptorTo.prettyString',o=>
-        "["  +$$($$(o,'descriptorTo.from'),'prettyString')
-       +" > "+$$($$(o,'descriptorTo.type'),'prettyString')
-       +"]");
-  $$('string descriptorTo.htmlSmallDescription',o=>
-  {
-    var from = $$(o,'descriptorTo.from');
-    var type = $$(o,'descriptorTo.type');
-    return '<span>'
-        +'Selected: ['+$$(from,'object.link')+_.escape(" > ")+$$(type,'object.link')+']'
-        +'<br/><span class="link" onclick="createInDescriptor($$(\''+o.id+'\'))">[new]</span>'
-      +'</span>';
-  });
-
-  $$('object    descriptorFrom.to');
-  $$('claimType descriptorFrom.type');
-  $$('object*   descriptorFrom.resolve',o=>
-  {
-    var type = $$(o,'descriptorFrom.type');
-    if(!type) return [];
-    var to = $$(o,'descriptorFrom.to');
-    if(!to) return [];
-    return to.getToType_froms(type);
-  });
-  $$('object    descriptorFrom.instanciate',o=>
-  {
-    var type = $$(o,'descriptorFrom.type');
-    if(!type) return undefined;
-    var to = $$(o,'descriptorFrom.to');
-    if(!to) return undefined;
-    var instance = Node.make();
-    $$(instance,type,to);
-    return instance;
-  });
-  $$('object    descriptorFrom.insert',function(node)
-  {
-    if(!node) return undefined;
-    if(_.isString(node)) node = $$(node);
-    var type = this.$('descriptorFrom.type');
-    if(!type) return undefined;
-    var to = this.$('descriptorFrom.to');
-    if(!to) return undefined;
-    $$(node,type,to);
-    return node;
-  });
-  $$('string    descriptorFrom.htmlList',o=>
-  {
-    var type = $$(o,'descriptorFrom.type');
-    var froms = $$(o,'descriptorFrom.resolve');
-
-    return '<li>'
-        +$$('objectsToHtml','js') (froms,12,
-          $$(type,'object.link')+_.escape(' < '),
-          ' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>')
-      +'</li>';
-
-
-    // var type = $$(o,'descriptorFrom.type');
-    // var froms = $$(o,'descriptorFrom.resolve');
-    // var truncated = froms.length > 12;
-    // if(truncated) froms = _.slice(froms,0,12);
-
-    // return '<li>'
-    //   +$$(type,'object.link')
-    //   +_.escape(' < ')
-    //   +(froms.length == 0 ? 'none' : froms.map(o=>$$(o,'object.link')).join(', '))
-    //   +(truncated ? ', (…)' : '')
-    //   +' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
-    //   +'</li>'
-  });
-  $$('string descriptorFrom.prettyString',o=>
-        "["  +$$($$(o,'descriptorFrom.to'  ),'prettyString')
-       +" < "+$$($$(o,'descriptorFrom.type'),'prettyString')
-       +"]");
-  $$('string descriptorFrom.htmlSmallDescription',o=>
-  {
-    var to   = $$(o,'descriptorFrom.to');
-    var type = $$(o,'descriptorFrom.type');
-    // var froms = $$(o,'descriptorFrom.resolve');
-    // console.log("descriptorFrom.onSelect()","o.id",o.id,"froms",froms.map(o=>o.name).join(', '));
-    // console.log("descriptorFrom.htmlSmallDescription()","descriptor",o,$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link'));
-    return '<span>'
-        +'Selected: ['+$$(to,'object.link')+_.escape(" < ")+$$(type,'object.link')+']'
-        +'<br/><span class="link" onclick="createInDescriptor($$(\''+o.id+'\'))">[new]</span>'
-      +'</span>';
-  });
-
-
-
-
-  $$('object    descriptorDifference.positive');
-  $$('object    descriptorDifference.negative');
-  $$('object*   descriptorDifference.resolve',o=>
-  {
-    var positive = $$(o,'descriptorDifference.positive');
-    if(!positive) return [];
-    var negative = $$(o,'descriptorDifference.negative');
-    if(!negative) return [];
-    positive = positive.$('resolve');
-    negative = negative.$('resolve');
-    return _.without(positive,...negative);
-  });
-  $$('object    descriptorDifference.instanciate',o=>
-  {
-    var positive = $$(o,'descriptorDifference.positive');
-    if(!positive) return undefined;
-    return positive.$('instanciate');
-  });
-  $$('string descriptorDifference.prettyString',o=>
-        "["  +o.$('positive').$('prettyString')
-       +" - "+o.$('negative').$('prettyString')
-       +"]");
-  $$('string descriptorDifference.htmlSmallDescription',o=>
-  {
-    var positive = $$(o,'descriptorDifference.positive');
-    var negative = $$(o,'descriptorDifference.negative');
-    return '<span>'
-        +'Selected: ['+$$(positive,'object.link')+_.escape(" - ")+$$(negative,'object.link')+']'
-        +'<br/><span class="link" onclick="createInDescriptor($$(\''+o.id+'\'))">[new]</span>'
-      +'</span>';
-  });
-
-   
-
-
-
-
-
-  $$('jsMethod method.js');
-  $$('objectsToHtml').$('instanceOf','method').$('js',(values,truncateCount=12,startItem='',endItem='')=>
-  {
-    var truncated = values.length > 12;
-    if(truncated) values = _.slice(values,0,12);
-
-    return ''
-      +startItem
-      +(values.length == 0 ? 'none' : values.map(o=>$$(o,'object.link')).join(', '))
-      +(truncated ? ', (…)' : '')
-      +endItem;
-  });
-
-
-
-
-
-
-
-
-
-
-
-  $$('anything listItem.value')
-  $$('listItem listItem.next')
-  $$('listItem listItem.prev')
-  $$('listItem list.first')
-  $$('listItem list.last')
-  $$('list list.push',function(value)
-  {
-    var item = $$().$(_instanceOf,'listItem').$('listItem.value',value);
-    var last = this.$('list.last');
-    if(!last)
-    {
-      this.$('list.first',item);
-      this.$('list.last',item);
-    }
-    else
-    {
-      last.$('listItem.next',item);
-      item.$('listItem.prev',last);
-      this.$('list.last',item);
-    }
-    return this;
-  });
-
-
-
-
-
-
-
-
-  $$('string menu.title')
-  $$('object* menu.options')
-  $$('menu','defaultPageView',{s:'floatingView'});
-  $$('string menu.floatingView',function()
-  {
-    return '<div class="menu floatingView">'
-        +this.$('options').map((option,i)=>'<div class="option">'+i+': '+option.$('link')+'</div>').join('')
-      +'</div>';
-  })
-  $$('string menu.link',function()
-  {
-    return '<a href="#'+this.name+'">'+_.escape('> ')+this.$('prettyString')+'</a>';
-  })
-  $$('string menuHyperlink.title')
-  $$('object menuHyperlink.linked')
-  $$('claimType menuHyperlink.view')
-  $$('string menuHyperlink.link',function()
-  {
-    var title = this.$('prettyString');
-    var link = this.$('linked');
-    if(link) title = '<a href="#'+link.name+'">'+title+'</a>'
-    return title;
-  })
-
-
-
-  $$('kaisHome')
-    .$('instanceOf','menu')
-    .$('menu.title',{s:'home'})
-    .$('options',
-
-      $$()
-        .$('instanceOf','menu')
-        .$('menu.title',{s:'core menu'})
-        .$('options',$$('kaisHome'))
-        .$('options',
-          $$().$('instanceOf','menuHyperlink')
-            .$('title',{s:'show tag'})
-            .$('linked','tag')
-        )
-        .$('options',
-          $$().$('instanceOf','menuHyperlink')
-            .$('title',{s:'show instanciable'})
-            .$('linked','instanciable')
-        )
-
-    )
-    .$('options',
-      $$().$('instanceOf','menuHyperlink')
-        .$('title',{s:'watch educative video'})
-        .$('linked',$$('KaiWatchingList'))
-    )
-
-
-
-
-
-
-
-
-
-
-
-  // async function fetchYoutubePlaylistPages(playlistId,pages=[],pageToken=undefined)
-  // {
-  //   var url = 'https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&key=AIzaSyAL23rZogdOZasdGcPD92_7Gxy4hkvMlZE&playlistId='+playlistId+'&maxResults=50';
-  //   if(pageToken) url+= '&pageToken='+pageToken;
-  //   console.log("fetchYoutubePlaylistPages()",'fetching',url);
-  //   var fetched = await fetch(url);
-  //   var json = await fetched.json();
-  //   pages.push(json);
-  //   if(json.nextPageToken) await fetchYoutubePlaylist(playlistId,pages,json.nextPageToken);
-  //   return pages;
-  // }
-  // // TODO expire cache past a certain date
-  // async function getYoutubePlaylistPages(playlistId)
-  // {
-  //   var cachePath = './cache/youtube_playlist/'+playlistId+'.json';
-  //   if(fs.existsSync(cachePath)) return JSON.parse(await fss.readFile(cachePath));
-  //   var cached = {};
-  //   cached.pages = await fetchYoutubePlaylistPages(playlistId);
-  //   cached.requestedAt = new Date();
-  //   await fss.writeFile(cachePath,JSON.stringify(cached),'utf8');
-  //   return cached;
-  // }
-
-  // // makeYouTubeVideoFromPlaylistDataAndByFetching = async item=>
-  // // {
-  // //   var video = await $$('YoutubeVideo','instanciable.make')(item.snippet.resourceId.videoId,false);
-
-  // //   $$('YoutubeThumbnailResolution').$froms('instanceOf').forEach(resolution=>
-  // //   {
-  // //     // console.log("resolution",resolution.name,$$(resolution,'stringName'));
-  // //     if(item.snippet.thumbnails[$$(resolution,'stringName')])
-  // //       video.$('thumbnailResolutions',resolution);
-  // //   });
-  // //   return video;
-  // // }
-
-  // // var makeYouTubeVideoFromPlaylistDataAndByFetching_Pool = new Promises.WorkerPool(25)
-  // //   .setWorker(makeYouTubeVideoFromPlaylistDataAndByFetching);
-
-
-
-  // // ServerContext.cachedFetch_YoutubePlaylistVideos = async pid=>
-  // // {
-  // //   var videos = [];
-  // //   var json = await getYoutubePlaylistPages(pid);
-  // //   if(!json.pages) return [];
-
-  // //   var videosPromises = [];
-  // //   for(var p in json.pages)
-  // //     for(var i in json.pages[p].items)
-  // //     {
-  // //       var item = json.pages[p].items[i];
-  // //       await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
-  // //       videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(item));
-
-  // //       // console.log("cachedFetch_YoutubePlaylistVideos() DONE ",video.$('title'));
-
-  // //       // var video = await $$('YoutubeVideo','instanciable.make')(item.snippet.resourceId.videoId,true);
-  // //       // video.$('title',{s:item.snippet.title});
-  // //       // video.$('description',{s:item.snippet.description});
-
-  // //       // var video = await $$('YoutubeVideo','instanciable.make')(item.snippet.resourceId.videoId,false);
-
-  // //       // $$('YoutubeThumbnailResolution').$froms('instanceOf').forEach(resolution=>
-  // //       // {
-  // //       //   console.log("resolution",resolution.name,$$(resolution,'stringName'));
-  // //       //   if(item.snippet.thumbnails[$$(resolution,'stringName')])
-  // //       //     video.$('thumbnailResolutions',resolution);
-  // //       // });
-  // //       // videos.push(video);
-  // //     }
-      
-  // //   var videos = Promise.all(videosPromises);
-  // //   return videos;
-  // // }
-
-
-
-
-  // ServerContext.cachedFetch_YoutubeVideo = async vid=>
-  // {
-  //   var cachePath = './cache/youtube_video/'+vid+'.json';
-  //   if(fs.existsSync(cachePath)) return JSON.parse(await fss.readFile(cachePath));
-  //   var url = 'https://www.googleapis.com/youtube/v3/videos?id='+vid+'&key=AIzaSyAL23rZogdOZasdGcPD92_7Gxy4hkvMlZE&part=snippet,contentDetails,statistics,status';
-  //   console.log("ServerContext.cachedFetch_YoutubeVideo()",'fetching',url);
-  //   var fetched = await fetch(url);
-  //   var json = await fetched.json();
-  //   if(json.error) return undefined;
-  //   json.requestedAt = new Date();
-  //   await fss.writeFile(cachePath,JSON.stringify(json),'utf8');
-  //   return json;
-  // }
-
-
-
-  // // $$('string YoutubePlaylist.title');
-  // // $$('string YoutubePlaylist.prettyString',o=>$$(o,"title")||o.id);
-  // // $$('string YoutubeVideo.defaultView',o=>"page");
-  // // $$('string YoutubeVideo.page',async o=>
-
-  // // });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  $$('YoutubeVideo','instanciable.make',async (vid,skipFetch=false)=>
-  {
-    var o = stridToNode(vid);
-    if(o) return o;
-
-    var processedJson = {};
-    // if(!skipFetch && !o.$('title'))
-    if(!skipFetch)
-    {
-      var {extractedJson} = await ServerContext.cachedFetch_YoutubeVideo2(vid);
-
-      var videoDetails = extractedJson.videoDetails;
-      var microformat = extractedJson.microformat;
-      // if(!videoDetails) console.error(JSON.stringify(extractedJson,null,'    '));
-      if(!videoDetails) throw new Error("videoDetails is undefined for: https://www.youtube.com/watch?v="+vid);
-      if(!microformat) throw new Error("microformat is undefined for: https://www.youtube.com/watch?v="+vid);
-      var playerMicroformatRenderer = microformat.playerMicroformatRenderer;
-      if(!playerMicroformatRenderer) throw new Error("playerMicroformatRenderer is undefined for: https://www.youtube.com/watch?v="+vid);
-
-      processedJson.title = videoDetails.title;
-      processedJson.lengthSeconds = Number(videoDetails.lengthSeconds);
-      processedJson.averageRating = videoDetails.averageRating;
-      processedJson.viewCount = Number(videoDetails.viewCount);
-      processedJson.publishDate = new Date(playerMicroformatRenderer.publishDate);
-      processedJson.uploadDate = new Date(playerMicroformatRenderer.uploadDate);
-      processedJson.description = playerMicroformatRenderer.description.simpleText;
-      processedJson.keywords = videoDetails.keywords;
-      processedJson.channelId = videoDetails.channelId;
-      processedJson.author = videoDetails.author;
-      processedJson.ownerChannelName = playerMicroformatRenderer.ownerChannelName;
-
-      var maxThumbnailResolution = _.last(playerMicroformatRenderer.thumbnail.thumbnails).url.match(/\/([^\.\/]+)\.[a-z0-9]+$/i);
-      if(maxThumbnailResolution)
-        processedJson.maxThumbnailResolution = maxThumbnailResolution[1];
-
-      if(!o) o = makeNode(vid).$(_instanceOf,'YoutubeVideo');
-
-      // console.log("processedJson",JSON.stringify(processedJson,null,'   '))
-      // if(processedJson.maxThumbnailResolution != 'maxresdefault') console.log("processedJson",JSON.stringify(processedJson,null,'   '))
-      o.$('title',{s:processedJson.title});
-      o.$('description',{s:processedJson.description});
-      o.$('length',{n:processedJson.lengthSeconds});
-      o.$('viewCount',{n:processedJson.viewCount});
-      var channel = ServerContext.makeYoutubeChannel(processedJson.channelId,processedJson.ownerChannelName);
-      o.$('channel',channel);
-      
-      console.log(_.padEnd(channel.$('title'),50),o.$('title'));
-
-      var maxThumbnailResolution = processedJson.maxThumbnailResolution
-        && $$('YoutubeThumbnailResolution').$froms('instanceOf')
-          .find(resolution=>
-            resolution.$('urlCode') == processedJson.maxThumbnailResolution );
-
-      if(!maxThumbnailResolution) maxThumbnailResolution =
-        $$('YoutubeThumbnailResolution').$froms('instanceOf')
-          .find(resolution=>
-            resolution.$('urlCode') == 'default' );
-
-      o.$('thumbnailResolutions',maxThumbnailResolution);
-    }
-    // if(!skipFetch && !o.$('title'))
-    // {
-    //   var snippet = await ServerContext.cachedFetch_YoutubeVideo(o.name);
-    //   // console.log("YoutubeVideo.page",'snippet',JSON.stringify(snippet,null,'   '));
-    //   snippet = snippet && snippet.items;
-    //   snippet = snippet && snippet[0];
-    //   snippet = snippet && snippet.snippet;
-    //   // console.log("YoutubeVideo.title",snippet.title);
-    //   if(snippet && snippet.title) o.$('title',{s:snippet.title});
-
-    //   $$('YoutubeThumbnailResolution').$froms('instanceOf').forEach(resolution=>
-    //   {
-    //     if(snippet.thumbnails[$$(resolution,'stringName')])
-    //       o.$('thumbnailResolutions',resolution);
-    //   });
-    // }
-
-    return o;
-  });
-
-
-
-  $$('string YoutubeChannel.title');
-
-  $$('string YoutubeVideo.title');
-  $$('string YoutubeVideo.description');
-  $$('number YoutubeVideo.length');
-  $$('number YoutubeVideo.viewCount');
-  $$('YoutubeChannel YoutubeVideo.channel');
-  $$('string YoutubeVideo.prettyString',o=>$$(o,"title")||$$(o,"strid"));
-  $$('YoutubeThumbnailResolution* YoutubeVideo.thumbnailResolutions');
-  $$('string YoutubeVideo.page',function()
-  {
-    // if(!$$(o,'YoutubeVideo.title'))
-    // {
-    //   var snippet = await ServerContext.cachedFetch_YoutubeVideo(o.name);
-    //   console.log("YoutubeVideo.page",'snippet',JSON.stringify(snippet,null,'   '));
-    //   snippet = snippet && snippet.items;
-    //   snippet = snippet && snippet[0];
-    //   snippet = snippet && snippet.snippet;
-    //   console.log("YoutubeVideo.title",snippet.title);
-    //   if(snippet && snippet.title) o.$('title',{s:snippet.title});
-    // }
-    return '<div>'
-        +'<h1>'+$$(this,'prettyString')+'</h1>'
-        +'<iframe width="1000" height="600" src="https://www.youtube.com/embed/'+this.name+'" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>'
-      +'</div>';
-  });
-  $$('string YoutubeVideo.boxView',function()
-  {
-    var resolutions = _.sortBy( $$(this,'thumbnailResolutions'), resolution=>-$$(resolution,'width') );
-    return '<div class="youtube-box">'
-        +'<img src="https://i.ytimg.com/vi/'+this.name+'/'+$$(resolutions[0],'urlCode')+'.jpg" width="1280" height="720" />'
-        // +'<div class="img-div"></div>'
-        +'<div>'+$$(this,'prettyString')+'</div>'
-      +'</div>';
-  });
-  $$('string YoutubeVideo.rowView',function()
-  {
-    var resolutions = _.sortBy( $$(this,'thumbnailResolutions'), resolution=>-$$(resolution,'width') );
-
-    var zzNum = num => num < 10 ? '0'+num : ''+num;
-    var lengthSeconds = this.$('length');
-    var lengthHours = Math.floor(lengthSeconds/60/60);
-    lengthSeconds-= lengthHours*60*60;
-    var lengthMinutes = Math.floor(lengthSeconds/60);
-    lengthSeconds-= lengthMinutes*60;
-    var duration = (lengthHours?lengthHours+':':'')+zzNum(lengthMinutes)+':'+zzNum(lengthSeconds);
-
-    return '<div class="rowView youtube">'
-        +'<a href="https://www.youtube.com/watch?v='+this.name+'"><img src="https://i.ytimg.com/vi/'+this.name+'/'+$$(resolutions[0],'urlCode')+'.jpg" /></a>'
-        // +'<div class="img-div"></div>'
-        +'<div>'
-          +'<div class="title">'+this.$('link')+'</div>'
-          +'<div class="subtitle">'+this.$('channel').$('link')+'</div>'
-          +'<div class="subtitle">'+duration+' - '+this.$('viewCount')+' views</div>'
-          +'<div class="tags">'+this.$('tags').map(tag=>tag.$('link')).join(', ')+'</div>'
-        +'</div>'
-      +'</div>';
-  });
-
-
-
-
-  $$('string tag.title');
-  $$('person tag.createdBy');
-  $$('tag* object.tags');
-
-
-  $$('KaiWatchingList (tag)')
-    .$('title',{s:'Kai\'s watching list'})
-    .$('createdBy','kaielvin');
-
-  [
-    'psychology',
-    'morality',
-    'existence',
-    'self-improvement',
-    'consciousness',
-    'society',
-    'neuroscience',
-    'philosophy-of-mind',
-    'social',
-    'technology',
-    'hegel',
-    'art&design',
-    'to-rewatch',
-  ]
-  .forEach(tagName=>
-    $$()
-    .$('instanceOf','tag')
-    .$('title',{s:tagName})
-    .$('createdBy','kaielvin')
-  );
-
-  $$('tag','defaultPageView',{s:"page"});
-  $$('string tag.page',function()
-  {
-    var items = this.$froms('object.tags');
-    return '<div class="items-row">'+items.map(item=>$$(item,'rowView')).join('')+'</div>';
-  });
-
-  // $$('string        playlist.title');
-  // $$('YoutubeVideo* playlist.items');
-  // $$('KaiWatchingList (playlist)');
-
-
-
-
-
-  $$('object collection.descriptor');
-  $$('collection','defaultPageView',{s:'page'});
-  $$('string collection.page', function()
-  {
-    var descriptor = this.$('descriptor');
-    var objects = descriptor.$('resolve');
-
-    console.log("collection.page()",objects);
-    console.log("collection.page()",descriptor.$('prettyString'));
-
-    var tags = {};
-    objects.forEach(object=>  object.$('tags').forEach(tag=> tags[tag.id] = (tags[tag.id]||0)+1)  );
-    tags = _.keys(tags).map(tagId=> ({tag:$$(tagId),count:tags[tagId]}) );
-    tags = _.sortBy(tags,({count})=>-count).map(({tag})=>tag);
-
-    console.log("collection.page()",objects.length);
-    return '<div class="collection">'
-        +'<div class="descriptor">'+descriptor.$('prettyString')+'</div>'
-        +'<div class="tags">'+tags.map(tag=>tag.$('link')).join(', ')+'</div>'
-        +'<div class="items-row">'
-          +objects.map((option,i)=>option.$('rowView')).join('')
-        +'</div>'
-      +'</div>';
-  });
-
-  $$('collectionTest (collection)')
-    .$('descriptor',
-      
-      $$()
-        .$('instanceOf','descriptorDifference')
-        .$('positive',
-          $$()
-            .$('instanceOf','descriptorFrom')
-            .$('to','KaiWatchingList')
-            .$('type','object.tags')
-        )
-        .$('negative',
-          $$()
-            .$('instanceOf','descriptorFrom')
-            .$('to',  KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'self-improvement')  )
-            .$('type','object.tags')
-        )
-    );
-
-
-
-
-
-
-
-
-
-
-
-
-
-  (async ()=>
-  {
-
-    await wait(500);
-    console.log("MAKING");
-    // $$('YoutubeVideo','instanciable.make')('Lhv_yFMuwxs');
-    // $$('YoutubeVideo','instanciable.make')('nnVq6gmatHU');
-    // $$('YoutubeVideo','instanciable.make')('Qw4l1w0rkjs');
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQs9dl3butrQDN0mqZJyG95'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'existence')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQSeOwjFgky9RRBGWpY-5xNh'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'morality')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQTBfsRCrrr6vGOjFDQSgRpJ'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'self-improvement')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQL8Z07uB8XUSeSkeW_EG66'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'consciousness')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'psychology')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQuJC8vK0iDB_Gsrbldwj_A'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'society')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQ6TV2go-XCcB4n3s7bWj6q'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'neuroscience')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQy4UXMPHp9tw7OUidxiKeB'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'philosophy-of-mind')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQVeEl1C6SuYtIUE-caAqG0'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'social')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQRLIQuriccuibNULk_RNvSu'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'technology')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQbNvrSfhcS9L1h9sjj-k4Q'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'hegel')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQS9Rq-ZWd00czLSWdbhjfr6'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'art&design')) );
-    (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQRPDlWPVHjc-ALoZvzjeH3s'))
-      .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'to-rewatch')) );
-
-    await wait(50);
-    console.log("filling KaiWatchingList");
-
-    $$('YoutubeVideo').$froms('instanceOf').forEach(video=>
-      $$(video,'tags','KaiWatchingList') );
-
-    // $$('YoutubeVideo').$from('instanceOf').forEach(video=>
-    //   $$('KaiWatchingList').$('items',video) );
-
-  })()
-
-
-
-
-
-  // https://www.youtube.com/oembed?format=json&amp;url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DnnVq6gmatHU
-  // https://www.googleapis.com/youtube/v3/videos?id=nnVq6gmatHU&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&part=snippet,contentDetails,statistics,status
-  //https://www.youtube.com/embed/HIbAz29L-FA?modestbranding=1&playsinline=0&showinfo=0&enablejsapi=1&origin=https%3A%2F%2Fintercoin.org&widgetid=1
-  // var url = new URL('https://www.youtube.com/watch?v=PZozMO3wWf&l=01234567');
-  // console.log(url,url.searchParams.keys(),url.searchParams.get('v'));
-  // for (let p of url.searchParams) {
-  //   console.log(p);
-  // }
-
-
-
-
-  $$('string YoutubeThumbnailResolution.stringName');
-  $$('number YoutubeThumbnailResolution.width');
-  $$('number YoutubeThumbnailResolution.height');
-  $$('string YoutubeThumbnailResolution.urlCode');
-  $$('string YoutubeThumbnailResolution.prettyString',o=>o.$('stringName'));
-  // $$('YoutubeThumbnailResolutions (list)');
-
-  [
-    ['default' , 120, 90, 'default'],
-    ['medium'  , 320,180, 'mqdefault'],
-    ['high'    , 480,360, 'hqdefault'],
-    ['standard', 640,480, 'sddefault'],
-    ['maxres'  ,1280,720, 'maxresdefault'],
-  ]
-  .forEach(([name,width,height,urlCode])=>
-  {
-    var item = $$()
-      .$(_instanceOf,"YoutubeThumbnailResolution")
-      .$('stringName',{s:name})
-      .$('width',{n:width})
-      .$('height',{n:height})
-      .$('urlCode',{s:urlCode});
-    // $$('YoutubeThumbnailResolutions').$ex('push',item);
-  });
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// $$('descriptorTo.htmlList','claimType.resolve',{j:o=>
-// {
-//   var type = $$(o,'descriptorTo.type');
-//   var functional = type.getFromType_boolean($$('claimType.functional'));
-//   var toType = $$(type,'claimType.typeTo');
-//   var to = $$(o,'descriptorTo.resolve');
-//   // var to = !functional && $$(o,'descriptorTo.resolve');
-//   to = _.isArray(to)
-//     ? $$('objectsToHtml','js') (to)
-//     : valueToHtml(to);
-//   return '<li>'
-//     +$$(type,'object.link')
-//     +_.escape(' > ')
-//     + (functional
-//       ? to
-//       : to
-//         +(  (toType === $$("string"))
-//           ? ' <span class="link" onclick="editStringDescriptor($$(\''+o.id+'\'))">[edit]</span>'
-//           : (toType === $$("jsMethod"))
-//           ? ' <span class="link" onclick="editJavascriptDescriptor($$(\''+o.id+'\'))">[edit-JS]</span>'
-//           : ' <span class="link" onclick="updateSelectedDescriptor($$(\''+o.id+'\'))">[select]</span>'
-//         )
-//     )
-//     +'</li>'
-// }});
-
-
-
-
-
-
-
-
-  // $$('object    descriptorTo.insert',function(value)
-  // {
-  //   var type = this.getFromType_node($$('descriptorTo.type'));
-  //   if(!type) return undefined;
-  //   var from_ = this.getFromType_node($$('descriptorTo.from'));
-  //   if(!from_) return undefined;
-  //   // console.log("descriptorTo.insert()",from_.name,type.name,valueToString(value));
-  //   $$(from_,type,value);
-  //   return from_;
-  // });
-
-
-//   $$('object    descriptorFrom.insert',function(node)
-//   {
-//     if(!node) return undefined;
-//     if(_.isString(node)) node = $$(node);
-//     var type = this.$('descriptorFrom.type');
-//     if(!type) return undefined;
-//     var to = this.$('descriptorFrom.to');
-//     if(!to) return undefined;
-//     $$(node,type,to);
-//     return node;
-//   });
-
-
-
-
-// $$('object* person.clipboard');
 
 
 
@@ -1238,6 +321,31 @@ app.use(cookieParser());
 var cors = require('cors')
 app.use(cors())
 app.use(express.static('public'))
+
+
+app.get('/all', (req, res) =>
+{
+  var excludedInstanciable = [
+    $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
+    $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
+  console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
+  // TODO use the main ClaimStore
+  var claimStore = new ClaimStore();
+  for(var fromId in _idToNodeIndex)
+  {
+    var instanciable = Node.makeById(fromId).$(_instanceOf);
+    // console.log("GET /all",instanciable&&instanciable.$('prettyString'),instanciable && excludedInstanciable.includes(instanciable));
+    if(instanciable && excludedInstanciable.includes(instanciable))
+      continue;
+    claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
+  }
+  res.send({compactJson:claimStore.toCompactJson()});
+
+  // res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
+});
+
+app.listen(port, () => console.log(`Example app listening on port ${port}!`))
+console.log("http://localhost:3000/all");
 
 
 // function nodeToJson(node,includeFroms=false)
@@ -1283,29 +391,21 @@ app.use(express.static('public'))
 
 
 
-app.get('/all', (req, res) =>
-{
-  var excludedInstanciable = [
-    $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
-    $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
-  console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
-  // TODO use the main ClaimStore
-  var claimStore = new ClaimStore();
-  for(var fromId in _idToNodeIndex)
-  {
-    var instanciable = Node.makeById(fromId).$(_instanceOf);
-    // console.log("GET /all",instanciable&&instanciable.$('prettyString'),instanciable && excludedInstanciable.includes(instanciable));
-    if(instanciable && excludedInstanciable.includes(instanciable))
-      continue;
-    claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
-  }
-  res.send({compactJson:claimStore.toCompactJson()});
 
-  // res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
-});
 
-app.listen(port, () => console.log(`Example app listening on port ${port}!`))
-console.log("http://localhost:3000/all");
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1398,6 +498,8 @@ wss.on('connection', function connection(ws)
   });
 
 });
+
+
 
 
 
@@ -1549,7 +651,7 @@ ServerContext.cachedFetch_YoutubePlaylist2 = async pid=>
 ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
 {
   console.log("ServerContext.fetchFromKaielvin_watchYoutubeVideos()");
-  var fetched = await fetch("https://kaielvin.org/watchedYoutubeVideos");
+  var fetched = await fetch("https://kaielvin.org/watchedYoutubeVideos/300");
   var json = await fetched.json();
   console.log("ServerContext.fetchFromKaielvin_watchYoutubeVideos()","json.length",json.length);
   var lastDate = 9999999999999;
@@ -1587,7 +689,7 @@ ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
   // json.forEach(({date,vid})=>
   {
     date = new Date(date);
-    console.log(date.toGMTString(),vid);
+    // console.log(date.toGMTString(),vid);
     if(bannedFromYoutube) break;
     await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
     // videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(vid));
@@ -1611,12 +713,355 @@ ServerContext.fetchFromKaielvin_watchYoutubeVideos = async pid=>
 
 console.log("NODE COUNT",_.size(_idToNodeIndex));
 
-// garbageCollect();
 
-if(false) (async ()=>
+async function fetchOrGetCachedDbpediaJson(node)
 {
+  var fileName = node.strid.substring(4)+".json"
+  var cachePath = './cache/dbpedia/'+fileName;
+  if(!fs.existsSync(cachePath))
+    await exec('cd ./cache/dbpedia/; wget "http://dbpedia.org/data/'+fileName+'"');
+  return JSON.parse(await fss.readFile(cachePath));
+}
 
-    var _kaielvin = $$('kaielvin');
+
+if(true) (async ()=>
+{
+    garbageCollect();
+    await recompactClaimsOnDisk();
+
+    var startTime = Date.now();
+    var counter = 0;
+    var claimIterator = Claim.makeOverallClaimIterator();
+    // var claimIterator = Claim.mainClaimStore.getAll();
+    for(var claim of claimIterator)
+      counter++;
+
+    console.log("TOTAL","counter",counter,"duration",Date.now()-startTime);
+
+
+    return;
+
+
+    if(Claim.fromTypeToSet)
+    {
+      var from_ = $$('kaielvin');
+      // var from_ = $$('dbr:Max_Tegmark');
+      // var type = $$('person.occupations');
+      // var type = $$('object.strid');
+      var type = $$('person.clipboard');
+
+      var to = $$('string');
+
+      // var claims = Claim.fromTypeToSet.slice(
+      //   new Claim(from_,type,Node.zero,Node.zero,0),
+      //   new Claim(from_,type,Node.one,Node.one,Number.MAX_SAFE_INTEGER)
+      // )
+
+// 51d2d490 6d8ac588 3828bc17 d086fe37 1588013794990
+// 51d2d490 6d8ac588 4bc96660 d086fe37 1588013794990 
+
+
+
+
+    function * makeClaimIterator(start,end)
+    {
+      var nodeIt = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(start);
+      var nodeStack = [nodeIt];
+      while(nodeIt && nodeIt.value.compareFromTypeDateToClaimer(end) < 0)
+      {
+        yield nodeIt.value;
+        if(nodeIt.right)
+        {
+          nodeIt = nodeIt.right;
+          while(nodeIt.left)
+          {
+            nodeStack.push(nodeIt);
+            nodeIt = nodeIt.left;
+          }
+        }
+        else nodeIt = nodeStack.pop();
+      }
+    }
+
+
+
+
+
+
+      var claimStart = new Claim(from_,type,to,Node.zero,1);
+      var claimEnd = new Claim(from_,type,to,Node.one,8640000000000000);
+      // var claimStart = new Claim(from_,Node.zero,Node.zero,Node.zero,1);
+      // var claimEnd   = new Claim(from_,Node.one,Node.one,Node.one,8640000000000000);
+
+      var resultCount = 0;
+      var startTime = Date.now();
+      Claim.compareCounter = 0;
+
+      // Claim.compareCounter = 0;
+      // var stopNode = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimEnd);
+      // var stopIndex = stopNode.index;
+      // console.log("stopNode",Claim.compareCounter,"comparisons",stopIndex);
+
+      // Claim.compareCounter = 0;
+      // var startNode = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimStart);
+      // var startIndex = startNode.index;
+      // console.log("startNode",Claim.compareCounter,"comparisons",startIndex);
+
+      // Claim.compareCounter = 0;
+      // while(startNode.value.compareFromTypeDateToClaimer(claimEnd) < 0)
+      // {
+      //   var claim = startNode.value;
+      //   console.log("At","i",startNode.index,"–",claim.idStr);
+
+      //   startNode = Claim.fromTypeToSet.findLeastGreaterThan(claim);
+      //   console.log("positioning Next",Claim.compareCounter,"comparisons");
+      //   Claim.compareCounter = 0;
+      // }
+
+
+      // Claim.compareCounter = 0;
+      // Claim.fromTypeToSet.splayIndex(stopNode.index);
+      // console.log("splayIndex stopNode",Claim.compareCounter,"comparisons",stopNode.index);
+
+      // Claim.compareCounter = 0;
+      // Claim.fromTypeToSet.splayIndex(startNode.index);
+      // console.log("splayIndex startNode",Claim.compareCounter,"comparisons",startNode.index);
+
+      // console.log("ss",startIndex,stopIndex);
+      // for(var i=startIndex;i<stopIndex;i++)
+      // {
+      //   // var claim = startNode.value;
+      //   // console.log("At","i",i,"–",claim.idStr);
+      //   resultCount++;
+
+      //   // Claim.compareCounter = 0;
+      //   // startNode = Claim.fromTypeToSet.findLeastGreaterThan(claim);
+      //   // console.log("positioning Next","i",i,"–",Claim.compareCounter,"comparisons");
+
+      //   // Claim.compareCounter = 0;
+      //   Claim.fromTypeToSet.splayIndex(i);
+      //   startNode = Claim.fromTypeToSet.root;
+      //   // console.log("positioning","i",i,"–",Claim.compareCounter,"comparisons");
+
+      //   // console.log("At",Claim.fromTypeToSet.root.index,Claim.fromTypeToSet.root.value.idStr);
+      // }
+
+      // var nodeStack = [startNode];
+      // while(startNode && startNode.value.compareFromTypeDateToClaimer(claimEnd) < 0)
+      // {
+      //   // var claim = startNode.value;
+      //   // console.log("At","i",startNode.index,"–",claim.idStr);
+      //   resultCount++;
+
+      //   if(startNode.right)
+      //   {
+      //     startNode = startNode.right;
+      //     while(startNode.left)
+      //     {
+      //       nodeStack.push(startNode);
+      //       startNode = startNode.left;
+      //     }
+      //   }
+      //   else startNode = nodeStack.pop();
+      // }
+
+      var claimIterator = makeClaimIterator(claimStart,claimEnd);
+      var claimsIn = {};
+      var lastDate = 0;
+      for(var claim of claimIterator)
+      {
+        if(claimsIn[claim.id]) console.error("!!!");
+        claimsIn[claim.id] = true;
+        console.log(claim.from.$('prettyString'),claim.type.$('prettyString'),valueToString(claim.to),claim.date.valueOf()-lastDate);
+        resultCount++;
+        lastDate = claim.date.valueOf();
+      }
+
+
+
+      console.log("TOTAL","comparisons",Claim.compareCounter,"results",resultCount,"duration",Date.now()-startTime);
+      console.log(from_.getFromType_nodes(type,false).length);
+
+
+/*
+
+0|semantic-graph-server  | TOTAL comparisons 155401 results 155355 duration 23
+
+0|semantic-graph-server  | TOTAL comparisons 780540 results 164067 duration 83
+0|semantic-graph-server  | TOTAL comparisons 164101 results 164067 duration 26
+
+
+
+0|semantic-graph-server  | stopNode 31 comparisons 30205
+0|semantic-graph-server  | startNode 15 comparisons 30200
+0|semantic-graph-server  | ss 30200 30205
+0|semantic-graph-server  | positioning i 30200 – 1 comparisons
+0|semantic-graph-server  | At 30200 2f1bc1eb 13d4c779 {"s":"dbr:Max_Tegmark"} d086fe37 1589404576877
+0|semantic-graph-server  | positioning i 30201 – 5 comparisons
+0|semantic-graph-server  | At 30201 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404576877
+0|semantic-graph-server  | positioning i 30202 – 3 comparisons
+0|semantic-graph-server  | At 30202 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404577066
+0|semantic-graph-server  | positioning i 30203 – 5 comparisons
+0|semantic-graph-server  | At 30203 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404576877
+0|semantic-graph-server  | positioning i 30204 – 3 comparisons
+0|semantic-graph-server  | At 30204 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404577066
+0|semantic-graph-server  | on WS client connection openned.
+
+
+0|semantic-graph-server  | stopNode 31 comparisons 30205
+0|semantic-graph-server  | startNode 15 comparisons 30200
+0|semantic-graph-server  | ss 30200 30205
+0|semantic-graph-server  | At i 30200 – 2f1bc1eb 13d4c779 {"s":"dbr:Max_Tegmark"} d086fe37 1589404576877
+0|semantic-graph-server  | positioning Next i 30200 – 2 comparisons
+0|semantic-graph-server  | At i 30201 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404576877
+0|semantic-graph-server  | positioning Next i 30201 – 6 comparisons
+0|semantic-graph-server  | At i 30202 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404577066
+0|semantic-graph-server  | positioning Next i 30202 – 4 comparisons
+0|semantic-graph-server  | At i 30203 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404576877
+0|semantic-graph-server  | positioning Next i 30203 – 6 comparisons
+0|semantic-graph-server  | At i 30204 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404577066
+0|semantic-graph-server  | positioning Next i 30204 – 4 comparisons
+
+
+0|semantic-graph-server  | startNode 33 comparisons 30200
+0|semantic-graph-server  | At i 30200 – 2f1bc1eb 13d4c779 {"s":"dbr:Max_Tegmark"} d086fe37 1589404576877
+0|semantic-graph-server  | positioning Next 3 comparisons
+0|semantic-graph-server  | At i 0 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404576877
+0|semantic-graph-server  | positioning Next 15 comparisons
+0|semantic-graph-server  | At i 0 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404577066
+0|semantic-graph-server  | positioning Next 9 comparisons
+0|semantic-graph-server  | At i 0 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404576877
+0|semantic-graph-server  | positioning Next 9 comparisons
+0|semantic-graph-server  | At i 0 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404577066
+0|semantic-graph-server  | positioning Next 7 comparisons
+
+
+
+
+*/
+
+      // var claims = Claim.fromTypeToSet.iterate(startNode.value,stopNode.value);
+
+
+
+
+
+      // // var claimStart = new Claim(new Node(from_.id.slice(0,7)+'0'),type,Node.one,Node.one,1);
+      // var claimStart = new Claim(from_,type,Node.zero,Node.zero,1);
+      // var claimEnd = new Claim(from_,type,Node.one,Node.one,8640000000000000);
+
+      // var start = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimStart);
+      // var stop = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimEnd);
+      // claimStart = start.value;
+      // claimEnd = stop.value;
+
+      //   console.log(claimStart.idStr);
+      //   console.log(claimEnd.idStr);
+      //   console.log(" ");
+      //   console.log(Claim.fromTypeToSet.indexOf(claimStart));
+      //   console.log(Claim.fromTypeToSet.indexOf(claimEnd));
+      //   console.log(" ");
+      // // var claim0 = new Claim(Node.zero,Node.zero,Node.zero,Node.zero,1);
+      // // var claim1 = new Claim(Node.one,Node.one,Node.one,Node.one,8640000000000000);
+
+      // // Claim.fromTypeToSet.push(claim0);
+      // // Claim.fromTypeToSet.push(claim1);
+
+      // var claims = Claim.fromTypeToSet.slice(claimStart,claimEnd);
+
+      // // console.log(Claim.fromTypeToSet.indexOf(claim0));
+      // // console.log(Claim.fromTypeToSet.indexOf(claim1));
+      // // console.log(Claim.fromTypeToSet.indexOf(claimStart));
+      // // console.log(Claim.fromTypeToSet.indexOf(claimEnd));
+
+      // // Claim.fromTypeToSet.splay(claimStart);
+      // // var start = Claim.fromTypeToSet.root;
+      // while(start && start.value)
+      // {
+      //   console.log(start.value.idStr);
+      //   start = start.getNext();
+      // }
+
+
+      // // var start = Claim.fromTypeToSet;
+      // // start.splay(claimStart);
+      // // console.log(start.value.idStr);
+      // // start = start.getNext();
+      // // console.log(start.value.idStr);
+
+      // console.log(Claim.fromTypeToSet.length,claims.length);
+
+      // claims.next();
+
+      // while(!claims.done)
+      // {
+      //   var claim = claims.value;
+      //   console.log(claim.type.$('prettyString'),valueToString(claim.to));
+      //   claims.next();
+      // }
+      // claims.forEach(claim=>
+      // {
+      //   console.log(claim.type.$('prettyString'),valueToString(claim.to));
+      // })
+
+      // console.log(Claim.fromTypeToSet.min().idStr);
+      // console.log(Claim.fromTypeToSet.max().idStr);
+    }
+
+
+
+    // await importFromDBPedia();
+
+    // ['occupation:philosopher','occupation:cosmologist','occupation:scientist',].forEach(strid=>
+    // {
+    //   var occupation = $$(strid);
+    //   occupation.$froms('person.occupations').forEach(p=>p.delete());
+    // })
+
+
+
+
+    return;
+
+
+    var people = $$('person').$froms('object.instanceOf');
+    for(var person of people)
+    {
+      if(person == _kaielvin) continue;
+
+      var json = await fetchOrGetCachedDbpediaJson(person);
+      var resource = json['http://dbpedia.org/resource/'+person.strid.substring(4)];
+      var labels = resource['http://www.w3.org/2000/01/rdf-schema#label'];
+      var labelEn = _.find(labels,label=>label.lang == 'en');
+      // console.log(labelEn);
+      if(!labelEn) console.error(_.padEnd(person.strid,30), "No EN label");
+      else
+      {
+        var label = labelEn.value;
+        var braketMatch = label.match(/^([^(]+)(\(.*|)$/);
+        label = _.trim(braketMatch[1]);
+        var names = label.split(' ');
+        console.log(_.padEnd(person.strid,40), label);
+      }
+
+
+      // var fileName = person.strid.substring(4)+".json"
+      // var cacheFileName = './cache/dbpedia/'+fileName;
+      // if(fs.existsSync(cacheFileName)) continue;
+      // console.log(cacheFileName);
+
+      // const { stdout, stderr } = await exec('cd ./cache/dbpedia/; wget "http://dbpedia.org/data/'+fileName+'"');
+      // break;
+
+      // var streamC2 = fs.createWriteStream(cacheFileName, {flags:'a',encoding: 'utf8'});
+      // streamC2.write('.');
+      // streamC2.close();
+      // console.log("http://dbpedia.org/data/"+fileName);
+    }
+
+
+    return;
+
     var _watching = $$('watching');
     var _watchingPerson = $$('watching.person');
     var _watchingVideo = $$('watching.video');
@@ -1625,18 +1070,21 @@ if(false) (async ()=>
     (await ServerContext.fetchFromKaielvin_watchYoutubeVideos())
       .forEach(({video,date})=>
     {
-      console.log("makeUnique()",JSON.stringify([
-        ['object.instanceOf','watching'],
-        ['watching.person','kaielvin'],
-        ['watching.video',video.strid],
-        ['watching.date',date.valueOf()],
-      ]));
       makeUnique([
         [_instanceOf,_watching],
         [_watchingPerson,_kaielvin],
         [_watchingVideo,video],
         [_watchingDate,{n:date.valueOf()}],
       ]);
+
+      if(makeUnique.justCreated) console.log("start.js importWatchings added:",date.toGMTString(),video.$('prettyString'));
+      // if(makeUnique.justCreated) console.log("start.js importWatchings created:",JSON.stringify([
+      //   ['instanceOf','watching'],
+      //   ['person','kaielvin'],
+      //   ['video',video.strid],
+      //   ['date',date.valueOf()],
+      // ]));
+
       // makeUnique([
       //   [_instanceOf,'watching'],
       //   ['watching.person','kaielvin'],
@@ -1651,3 +1099,258 @@ if(false) (async ()=>
     });
     
 })();
+
+
+
+async function importFromDBPedia()
+{
+
+  const propertiesByPrefix = {
+    dbc:['dct:subject'],
+    dbo:['dct:type'],
+    yago:['dct:type'],
+    "umbel-rc":['dct:type'],
+    dbr:['dbo:knownFor','dbo:mainInterest','dbp:occupation','dbo:field'],
+  }
+
+  var collectionsByCategory = {
+    'philosopher':['dbr:Philosophy','dbo:Philosopher',
+      'yago:Philosopher110423589',
+      'dbc:Philosophers_of_science','dbr:Philosophers_of_cosmology'],
+    'cosmologist':['dbr:Cosmology',
+      'yago:Cosmologist109819667',
+      'dbc:Cosmologists','dbc:Philosophy_of_astronomy','dbc:Physical_cosmology','dbr:Philosophers_of_cosmology'],
+    'scientist':['dbr:Science','dbr:Physicist','umbel-rc:Scientist',
+      'yago:Scientist110560637',
+      'yago:Physicist110428004',
+      'dbo:Scientist',
+      'dbc:Scientists'],
+  };
+
+
+  for(var category in collectionsByCategory)
+  {
+    console.log("CATEGORY",category);
+    var collections = collectionsByCategory[category];
+    for(var collection of collections)
+    {
+    console.log("  COLLECTION",collection);
+      var prefix = collection.split(':')[0];
+      var properties = propertiesByPrefix[prefix];
+      for(var property of properties)
+      {
+        console.log("    PROPERTY",property);
+
+        var query = `SELECT DISTINCT ?person WHERE {
+                { ?person `+property+` `+collection+`. ?person rdf:type dbo:Person }
+         } `;
+        // var query = `SELECT DISTINCT ?person ?label WHERE {
+        //         { ?person `+property+` `+collection+`. ?person foaf:name ?label. FILTER( lang(?label) = "en" ) }
+        //  } `;
+        // console.log('query:',query);
+        query = encodeURI(query);
+
+        var fetched = await fetch("http://dbpedia.org/sparql/?default-graph-uri=http%3A%2F%2Fdbpedia.org&query="+query+"&format=application%2Fsparql-results%2Bjson&CXML_redir_for_subjs=121&CXML_redir_for_hrefs=&timeout=30000&debug=on&run=+Run+Query+");
+        try
+        {
+          var json = await fetched.json();
+        }
+        catch(e)
+        {
+          console.error("Response not json",e);
+          return;
+        }
+        // console.log(json);
+        // console.log(json.results);
+        // console.log(json.results.bindings);
+        // json.results.bindings.forEach(o=>console.log(o.person.value));
+        var dbpediaUrls = json.results.bindings.map(o=>o.person.value);
+        dbpediaUrls.forEach(dbpediaUrl=>
+        {
+          var strid = "dbr:"+_.last(dbpediaUrl.split('/'));
+          console.log("      + "+strid);
+          var node = Node.makeByStrid(strid)
+            .$(_instanceOf,"person")
+            .$('occupations','occupation:'+category);
+
+        });
+        console.log("    PROPERTY",property,'count',json.results.bindings.length);
+      }
+    }
+  }
+
+
+}
+
+
+
+
+
+
+
+
+
+//   // async function fetchYoutubePlaylistPages(playlistId,pages=[],pageToken=undefined)
+//   // {
+//   //   var url = 'https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&key=AIzaSyAL23rZogdOZasdGcPD92_7Gxy4hkvMlZE&playlistId='+playlistId+'&maxResults=50';
+//   //   if(pageToken) url+= '&pageToken='+pageToken;
+//   //   console.log("fetchYoutubePlaylistPages()",'fetching',url);
+//   //   var fetched = await fetch(url);
+//   //   var json = await fetched.json();
+//   //   pages.push(json);
+//   //   if(json.nextPageToken) await fetchYoutubePlaylist(playlistId,pages,json.nextPageToken);
+//   //   return pages;
+//   // }
+//   // // TODO expire cache past a certain date
+//   // async function getYoutubePlaylistPages(playlistId)
+//   // {
+//   //   var cachePath = './cache/youtube_playlist/'+playlistId+'.json';
+//   //   if(fs.existsSync(cachePath)) return JSON.parse(await fss.readFile(cachePath));
+//   //   var cached = {};
+//   //   cached.pages = await fetchYoutubePlaylistPages(playlistId);
+//   //   cached.requestedAt = new Date();
+//   //   await fss.writeFile(cachePath,JSON.stringify(cached),'utf8');
+//   //   return cached;
+//   // }
+
+//   // // makeYouTubeVideoFromPlaylistDataAndByFetching = async item=>
+//   // // {
+//   // //   var video = await $$('YoutubeVideo','instanciable.make')(item.snippet.resourceId.videoId,false);
+
+//   // //   $$('YoutubeThumbnailResolution').$froms('instanceOf').forEach(resolution=>
+//   // //   {
+//   // //     // console.log("resolution",resolution.name,$$(resolution,'stringName'));
+//   // //     if(item.snippet.thumbnails[$$(resolution,'stringName')])
+//   // //       video.$('thumbnailResolutions',resolution);
+//   // //   });
+//   // //   return video;
+//   // // }
+
+//   // // var makeYouTubeVideoFromPlaylistDataAndByFetching_Pool = new Promises.WorkerPool(25)
+//   // //   .setWorker(makeYouTubeVideoFromPlaylistDataAndByFetching);
+
+
+
+//   // // ServerContext.cachedFetch_YoutubePlaylistVideos = async pid=>
+//   // // {
+//   // //   var videos = [];
+//   // //   var json = await getYoutubePlaylistPages(pid);
+//   // //   if(!json.pages) return [];
+
+//   // //   var videosPromises = [];
+//   // //   for(var p in json.pages)
+//   // //     for(var i in json.pages[p].items)
+//   // //     {
+//   // //       var item = json.pages[p].items[i];
+//   // //       await makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.unlocked();
+//   // //       videosPromises.push(makeYouTubeVideoFromPlaylistDataAndByFetching_Pool.process(item));
+
+//   // //       // console.log("cachedFetch_YoutubePlaylistVideos() DONE ",video.$('title'));
+
+//   // //       // var video = await $$('YoutubeVideo','instanciable.make')(item.snippet.resourceId.videoId,true);
+//   // //       // video.$('title',{s:item.snippet.title});
+//   // //       // video.$('description',{s:item.snippet.description});
+
+//   // //       // var video = await $$('YoutubeVideo','instanciable.make')(item.snippet.resourceId.videoId,false);
+
+//   // //       // $$('YoutubeThumbnailResolution').$froms('instanceOf').forEach(resolution=>
+//   // //       // {
+//   // //       //   console.log("resolution",resolution.name,$$(resolution,'stringName'));
+//   // //       //   if(item.snippet.thumbnails[$$(resolution,'stringName')])
+//   // //       //     video.$('thumbnailResolutions',resolution);
+//   // //       // });
+//   // //       // videos.push(video);
+//   // //     }
+      
+//   // //   var videos = Promise.all(videosPromises);
+//   // //   return videos;
+//   // // }
+
+
+
+
+//   // ServerContext.cachedFetch_YoutubeVideo = async vid=>
+//   // {
+//   //   var cachePath = './cache/youtube_video/'+vid+'.json';
+//   //   if(fs.existsSync(cachePath)) return JSON.parse(await fss.readFile(cachePath));
+//   //   var url = 'https://www.googleapis.com/youtube/v3/videos?id='+vid+'&key=AIzaSyAL23rZogdOZasdGcPD92_7Gxy4hkvMlZE&part=snippet,contentDetails,statistics,status';
+//   //   console.log("ServerContext.cachedFetch_YoutubeVideo()",'fetching',url);
+//   //   var fetched = await fetch(url);
+//   //   var json = await fetched.json();
+//   //   if(json.error) return undefined;
+//   //   json.requestedAt = new Date();
+//   //   await fss.writeFile(cachePath,JSON.stringify(json),'utf8');
+//   //   return json;
+//   // }
+
+
+
+
+
+//   (async ()=>
+//   {
+
+//     await wait(500);
+//     console.log("MAKING");
+//     // $$('YoutubeVideo','instanciable.make')('Lhv_yFMuwxs');
+//     // $$('YoutubeVideo','instanciable.make')('nnVq6gmatHU');
+//     // $$('YoutubeVideo','instanciable.make')('Qw4l1w0rkjs');
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQs9dl3butrQDN0mqZJyG95'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'existence')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQSeOwjFgky9RRBGWpY-5xNh'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'morality')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQTBfsRCrrr6vGOjFDQSgRpJ'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'self-improvement')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQL8Z07uB8XUSeSkeW_EG66'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'consciousness')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'psychology')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQuJC8vK0iDB_Gsrbldwj_A'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'society')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQ6TV2go-XCcB4n3s7bWj6q'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'neuroscience')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQy4UXMPHp9tw7OUidxiKeB'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'philosophy-of-mind')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQVeEl1C6SuYtIUE-caAqG0'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'social')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQRLIQuriccuibNULk_RNvSu'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'technology')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQQbNvrSfhcS9L1h9sjj-k4Q'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'hegel')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQS9Rq-ZWd00czLSWdbhjfr6'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'art&design')) );
+//     (await ServerContext.cachedFetch_YoutubePlaylistVideos('PLfoEg9YVcQQRPDlWPVHjc-ALoZvzjeH3s'))
+//       .forEach(video=> video.$('tags',KaiElvin.$froms('tag.createdBy').find(u=>u.$('title') == 'to-rewatch')) );
+
+//     await wait(50);
+//     console.log("filling KaiWatchingList");
+
+//     $$('YoutubeVideo').$froms('instanceOf').forEach(video=>
+//       $$(video,'tags','KaiWatchingList') );
+
+//     // $$('YoutubeVideo').$from('instanceOf').forEach(video=>
+//     //   $$('KaiWatchingList').$('items',video) );
+
+//   })()
+
+
+
+
+
+//   // https://www.youtube.com/oembed?format=json&amp;url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DnnVq6gmatHU
+//   // https://www.googleapis.com/youtube/v3/videos?id=nnVq6gmatHU&key=AIzaSyByA7cXJD_3Hi8f2rTQ3loCyqIA6NfK9fc&part=snippet,contentDetails,statistics,status
+//   //https://www.youtube.com/embed/HIbAz29L-FA?modestbranding=1&playsinline=0&showinfo=0&enablejsapi=1&origin=https%3A%2F%2Fintercoin.org&widgetid=1
+//   // var url = new URL('https://www.youtube.com/watch?v=PZozMO3wWf&l=01234567');
+//   // console.log(url,url.searchParams.keys(),url.searchParams.get('v'));
+//   // for (let p of url.searchParams) {
+//   //   console.log(p);
+//   // }
+
+
+
+
+
+
+
+
+
