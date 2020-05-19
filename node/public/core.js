@@ -100,6 +100,7 @@ function resetFulltextSearchObject(_fulltextSearch) // used by loader from disk
 var nodeTofullTextDocument = node=>
 {
   var instanciable = node.$('instanceOf');
+  if(instanciable == $$('person')) return null; // making the index buggy at the moment
   var doc = {id:node.id};
   doc.strid = node.strid;
   doc.title = node.$('title');
@@ -488,9 +489,14 @@ Claim.remove = function(claim) // by value
 {
   // console.log("Claim.remove()",claim.id,claim.idStr);
   if(!Claim.hideDeleteLogs) console.log("Claim.remove()",claim.id,claim.idStr);
-  var removed = claim.from.removeClaim(claim);
+  var from_ = claim.from;
+  var removed = from_.removeClaim(claim);
   if(!removed) return false;
   Claim.count--;
+  var to = claim.to;
+  // TODO handle the potential situation where node held somewhere and temporarily empty
+  if(                   from_.isEmpty()) delete _idToNodeIndex[from_.id];
+  if(to instanceof Node && to.isEmpty()) delete _idToNodeIndex[to   .id];
   // console.log("Claim.remove() Claim.count--",Claim.count);
   if(Claim.onNewClaim) Claim.onNewClaim(removed,true);
   return true;
@@ -668,6 +674,37 @@ class Node
       for(var claim of claims) yield claim;
     }
   }
+  isEmpty()
+  {
+    // this.typeTos and this.typeFroms should be empty, but checking for empty arrays anyway (fast)
+    for(var typeId in this.typeTos)
+      if(this.typeTos[typeId].length > 0) return false;
+    for(var typeId in this.typeFroms)
+    {
+      var froms = this.typeFroms[typeId];
+      for(var fromId in froms)
+        if(froms[fromId].length > 0) return false;
+    }
+    return true;
+  }
+  fromTypeClaimCount()
+  {
+    var total = 0;
+    for(var typeId in this.typeTos)
+      total+= this.typeTos[typeId].length;
+    return total;
+  }
+  toTypeClaimCount()
+  {
+    var total = 0;
+    for(var typeId in this.typeFroms)
+    {
+      var fromss = this.typeFroms[typeId];
+      for(var fromId in froms)
+        total+= froms[fromId].length;
+    }
+    return total;
+  }
 
   getFromType_nodes(type,unique=true,byDate=true)
   {
@@ -814,10 +851,10 @@ class Node
 
   delete()
   {
-    console.log("Node.delete()",this.id,this.strid,this.$('prettyString'));
+    // console.log("Node.delete()",this.id,this.strid,this.$('prettyString'));
     for(var typeId in this.typeTos)
     {
-      console.log("Node.delete()","toType",Node.makeById(typeId).strid,this.typeTos[typeId].length);
+      // console.log("Node.delete()","toType",Node.makeById(typeId).strid,this.typeTos[typeId].length);
       var claims = [...this.typeTos[typeId]];
       claims.forEach(Claim.remove);
     }
@@ -856,6 +893,10 @@ Node.makeByStrid = strid=>
   var node = Node.make();
   node.setFromType(_strid,{s:strid});
   return node;
+}
+Node.getByStrid = strid=>
+{
+  return _stridClaims[strid];
 }
 Node.getById = id=>
 {
@@ -933,6 +974,8 @@ var _defaultValue   = Node.makeById('d87ad258');
 var _functional     = Node.makeById('bc92e4bd');
 var _resolve        = Node.makeById('d26ffe55');
 var _kaielvin       = Node.makeById('d086fe37');
+var _claimDisabled  = Node.makeById('4f494962');
+var _claimDeprecated= Node.makeById('6f450862');
 
 Node.defaultUser = _kaielvin;
 
@@ -986,7 +1029,7 @@ function strToType(str,node=undefined,classes=undefined)
     for(var class_ of classes)
     {
       var type = stridToNode(class_.name+'.'+str);
-      if(type) return type;
+      if(type && type.$(_claimDisabled) != _true) return type;
     }
   }
   var type = node ? undefined : stridToNode('object.'+str); // last attempt
@@ -1195,6 +1238,7 @@ function instanciate(instanciable,...typeTos)
   // console.log("instanciate()",instanciable.name,typeTos);
   return makeUnique(typeTos);
 }
+Node.instanciate = instanciate;
 function makeUnique(typeTos)
 {
     // console.log('makeUnique()');

@@ -277,6 +277,7 @@ async function recompactClaimsOnDisk()
 Claim.onNewClaim = async (claim,remove=false)=>
 {
   if(recompactingLock) await recompactingLock;
+  // if(remove) console.log("Claim.onNewClaim() REMOVE","ClaimID",claim.id,claim.idStr);
   // if(!remove) console.log("Claim.onNewClaim()","ClaimID",claim.id,claim.idStr);
   var compactJson = claim.toCompactJson();
   if(remove) compactJson.del = true;
@@ -329,15 +330,17 @@ app.get('/all', (req, res) =>
 {
   var excludedInstanciable = [
     $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
+    $$('person'),$$('givenName'),$$('surname'),
     $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
   console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
   // TODO use the main ClaimStore
   var claimStore = new ClaimStore();
   for(var fromId in _idToNodeIndex)
   {
-    var instanciable = Node.makeById(fromId).$(_instanceOf);
+    var node = Node.makeById(fromId);
+    var instanciable = node.$(_instanceOf);
     // console.log("GET /all",instanciable&&instanciable.$('prettyString'),instanciable && excludedInstanciable.includes(instanciable));
-    if(instanciable && excludedInstanciable.includes(instanciable))
+    if(instanciable && excludedInstanciable.includes(instanciable) && node != _kaielvin)
       continue;
     claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
   }
@@ -726,341 +729,417 @@ async function fetchOrGetCachedDbpediaJson(node)
 }
 
 
+
+
+var _treatPerson_lock;
+var _treatPerson_counter = 0;
+var givenNamesMap;
+var surnamesMap;
+var initNameMaps = ()=>
+{
+  if(!surnamesMap)
+  {
+    surnamesMap = {};
+    $$('surname').$froms('object.instanceOf').forEach(n=>surnamesMap[n.$('object.title')] = n);
+  }
+  if(!givenNamesMap)
+  {
+    givenNamesMap = {};
+    $$('givenName').$froms('object.instanceOf').forEach(n=>givenNamesMap[n.$('object.title')] = n);
+  }
+}
+async function treatPerson(person,progress=undefined)
+{
+  if(person == _kaielvin) return;
+
+  _treatPerson_counter++;
+  if(_treatPerson_counter >= 50) _treatPerson_lock = Promises.resolvablePromise();
+
+  // console.log("treatPerson()",_treatPerson_counter,person.name);
+
+  // person.delete(); // killing everyone (but myself)
+
+  try
+  {
+    var json = await fetchOrGetCachedDbpediaJson(person);
+  }
+  catch(e) {return;}
+  // console.log("treatPerson()",_treatPerson_counter,person.name,"fetched");
+  var resource = json['http://dbpedia.org/resource/'+person.strid.substring(4)];
+  if(!resource) return _treatPerson_counter--; // ...
+  var labels = resource['http://www.w3.org/2000/01/rdf-schema#label'];
+  var labelEn = _.find(labels,label=>label.lang == 'en');
+  if(!labelEn)
+  {
+    labels = resource['http://xmlns.com/foaf/0.1/name'];
+    labelEn = _.find(labels,label=>label.lang == 'en');
+  }
+  // console.log(labelEn);
+  // if(!labelEn) console.error(_.padEnd(person.strid,30), "No EN label");
+  if(labelEn)
+  {
+    var label = labelEn.value;
+    var braketMatch = label.match(/^([^(]+)(\(.*|)$/);
+    label = _.trim(braketMatch[1]);
+    label = label.replace(/,/g,'');
+    var names = label.split(' ');
+    // if(!(names.includes('van') || names.includes('Van'))) return _treatPerson_counter--;
+    // if(!(names.includes('de') || names.includes('De')|| names.includes('Du')|| names.includes('du'))) return _treatPerson_counter--;
+    // if(!names.slice(1,names.length-1).find(n=>_.lowerFirst(n)==n)) return _treatPerson_counter--;
+    var data = {};
+    do
+    {
+      data.givenName = names.shift();
+      if(names.length == 0) break;
+      var last = _.last(names);
+      if(_.lowerCase(names) == 'jr')
+      {
+        data.suffix = 'Jr.';
+        names.pop();
+      }
+      else if(_.lowerCase(last) == 'sr')
+      {
+        data.suffix = 'Sr.';
+        names.pop();
+      }
+      else if(_.lowerCase(last).match(/^i+$/))
+      {
+        data.suffix = _.fill(Array(last.length), 'I').join('');
+        names.pop();
+      }
+      if(names.length == 0) break;
+
+      var prefixes = ['van','von','du','de','des','del','do','da','di','of','the','le','la','abu','ibn','bin','ben'];
+      var prefixesAttached = ["d'",'al-'];
+      var vanDeIndex = _.findIndex(names,n=>prefixes.includes(n.toLowerCase()) || prefixesAttached.some(pf=>n.toLowerCase().startsWith(pf)) );
+      if(vanDeIndex >= 0)
+      {
+        data.surnamePrefix = names[vanDeIndex];
+        data.surname = names.slice(vanDeIndex).join(' ');
+        names = names.slice(0,vanDeIndex);
+      }
+      else
+        data.surname = names.pop();
+
+      if(names.length == 0) break;
+
+      data.middleName = names[0];
+
+    } while(false);
+
+    // var givenName = Node.instanciate('givenName',['object.title',{s:data.givenName}]);
+    // var personTitle = person.$('object.title');
+    // if(!personTitle) person.$('object.title',{s:label});
+    // var personGivenName = person.$('person.givenName');
+    // if(!personGivenName) person.$('person.givenName',givenName);
+
+    initNameMaps();
+
+    // if(data.surname)
+    // {
+    //   var surname = surnamesMap[data.surname];
+    //   if(!surname) surname = surnamesMap[data.surname] = Node.make().$('object.instanceOf','surname').$('object.title',{s:data.surname});
+    //   // var surname = Node.instanciate('surname',['object.title',{s:data.surname}]);
+    //   var personSurname = person.$('person.surname');
+    //   if(!personSurname) person.$('person.surname',surname);
+    // }
+    if(data.middleName)
+    {
+      var personMiddleGivenName = person.$('person.middleGivenName');
+      var personMiddleSurname = person.$('person.middleSurname');
+
+      if(!(personMiddleGivenName || personMiddleSurname))
+      {
+        var givenName = givenNamesMap[data.middleName];
+        var surname;
+        if(!givenName)
+        {
+          if(_.lowerCase(data.middleName).length == 1) // 'L' or 'L.'
+            givenName = givenNamesMap[data.middleName] = Node.make().$('object.instanceOf','givenName').$('object.title',{s:data.middleName});
+          else
+          {
+            surname = surnamesMap[data.middleName];
+            if(!surname) surname = surnamesMap[data.surname] = Node.make().$('object.instanceOf','surname').$('object.title',{s:data.middleName});
+          }
+        }
+
+        if(givenName)    person.$('person.middleGivenName',givenName);
+        else if(surname) person.$('person.middleSurname',surname);
+      }
+    }
+    if(data.middleName)
+      console.log(_.padEnd(label,40), _.padEnd(data.givenName,18), _.padEnd(data.middleName||'',18), _.padEnd(data.surname||'',18), _.padEnd(data.suffix||'',5),_.padStart(Math.round(progress*100)+'%',5));
+  }
+  _treatPerson_counter--;
+  if(_treatPerson_lock)
+  {
+    _treatPerson_lock.resolve();
+    _treatPerson_lock = undefined;
+  }
+}
+
+async function findTextualMention(inNode,inField)
+{
+  var text = inNode.$(inField);
+  if(!_.isString(text)) return;
+  // var splitter = /[ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\'\"\|\~\`\_\-\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+/;
+  var splitter = /([ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\"\|\~\`\_\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]*)([^ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\"\|\~\`\_\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+)/g;
+  // var words = text.split(splitter);
+  console.log(splitter.match(text));
+
+  // ### searching for people ###
+  // var foundGivenNames = words.map((w,i)=>givenNamesMap[w] ? ({str:w,index:i}) : undefined).filter(o=>o);
+  // for(var {str,index} of foundGivenNames)
+  // {
+  //   var matches = [];
+  //   var people = givenNamesMap[str].$froms('person.givenName');
+  //   for(var person of people)
+  //   {
+  //     if(person.strid == 'dbr:Brain_(comics)') continue;
+  //     if(person.strid == 'dbr:Cosmos') continue;
+  //     if(person.strid == 'dbr:Julian_(emperor)') continue;
+  //     if(person.strid == 'dbr:Steel_(John_Henry_Irons)') continue;
+  //     if(person.strid == 'dbr:Melissa_(philosopher)') continue;
+  //     if(person.strid == 'dbr:Scientist') continue;
+  //     if(person.strid == 'dbr:Big_Bang') continue;
+  //     if(person.strid == 'dbr:Crusher_(comics)') continue;
+  //     if(person.strid == 'dbr:Hippo_(philosopher)') continue;
+  //     if(person.strid == 'dbr:Lucy_(chimpanzee)') continue;
+  //     if(person.strid == 'dbr:Yi_I') continue;
+  //     if(person.strid == 'dbr:Joker_(comics)') continue;
+  //     if(person.strid == 'dbr:Horace') continue;
+  //     if(person.strid == 'dbr:Ismail_II') continue;
+  //     if(person.strid == 'dbr:Rumi') continue;
+  //     if(person.strid == 'dbr:Horus_(athlete)') continue;
+  //     if(person.strid == 'dbr:Pandemic_(comics)') continue;
+  //     if(person.strid == 'dbr:') continue;
+  //     if(person.strid == 'dbr:') continue;
+  //     if(person.strid == 'dbr:') continue;
+
+  //     var surname = person.$('person.surname');
+  //     surname = surname && surname.$('title');
+  //     var middleName = person.$('person.middleGivenName') || person.$('person.middleSurname');
+  //     middleName = middleName && middleName.$('title');
+  //     if(!surname)
+  //     {
+  //       matches.push({person,score:1});
+  //       continue;
+  //     }
+  //     if(!words[index+1]) continue;
+
+  //     var foundMiddleName = middleName && words[index+1] == middleName;
+  //     var foundSurname1 = !foundMiddleName && surname && words[index+1] == surname;
+  //     var foundSurname2 = words[index+2] && words[index+2] == surname;
+
+  //     if(foundMiddleName && foundSurname2)
+  //     {
+  //       matches.push({person,score:3});
+  //       continue;
+  //     }
+  //     if(foundSurname1)
+  //     {
+  //       matches.push({person,score: middleName ? 1 : 2 });
+  //       continue;
+  //     }
+
+  //     // console.log(_.padEnd(str,18),_.padEnd(surname||'',18),title);
+  //     // totalFound++;
+  //   }
+  //   if(matches.length == 0) continue;
+  //   matches = _.sortBy(matches,match=>-match.score);
+  //   var {person,score} = matches[0];
+  //   console.log(_.padEnd(person.$('title'),40),_.padEnd(score,3),_.padEnd(title,102),person.strid);
+
+}
+
+
 if(true) (async ()=>
 {
     garbageCollect();
-    await recompactClaimsOnDisk();
-
-    var startTime = Date.now();
-    var counter = 0;
-    var claimIterator = Claim.makeOverallClaimIterator();
-    // var claimIterator = Claim.mainClaimStore.getAll();
-    for(var claim of claimIterator)
-      counter++;
-
-    console.log("TOTAL","counter",counter,"duration",Date.now()-startTime);
-
-
-    return;
-
-
-    if(Claim.fromTypeToSet)
-    {
-      var from_ = $$('kaielvin');
-      // var from_ = $$('dbr:Max_Tegmark');
-      // var type = $$('person.occupations');
-      // var type = $$('object.strid');
-      var type = $$('person.clipboard');
-
-      var to = $$('string');
-
-      // var claims = Claim.fromTypeToSet.slice(
-      //   new Claim(from_,type,Node.zero,Node.zero,0),
-      //   new Claim(from_,type,Node.one,Node.one,Number.MAX_SAFE_INTEGER)
-      // )
-
-// 51d2d490 6d8ac588 3828bc17 d086fe37 1588013794990
-// 51d2d490 6d8ac588 4bc96660 d086fe37 1588013794990 
-
-
-
-
-    function * makeClaimIterator(start,end)
-    {
-      var nodeIt = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(start);
-      var nodeStack = [nodeIt];
-      while(nodeIt && nodeIt.value.compareFromTypeDateToClaimer(end) < 0)
-      {
-        yield nodeIt.value;
-        if(nodeIt.right)
-        {
-          nodeIt = nodeIt.right;
-          while(nodeIt.left)
-          {
-            nodeStack.push(nodeIt);
-            nodeIt = nodeIt.left;
-          }
-        }
-        else nodeIt = nodeStack.pop();
-      }
-    }
-
-
-
-
-
-
-      var claimStart = new Claim(from_,type,to,Node.zero,1);
-      var claimEnd = new Claim(from_,type,to,Node.one,8640000000000000);
-      // var claimStart = new Claim(from_,Node.zero,Node.zero,Node.zero,1);
-      // var claimEnd   = new Claim(from_,Node.one,Node.one,Node.one,8640000000000000);
-
-      var resultCount = 0;
-      var startTime = Date.now();
-      Claim.compareCounter = 0;
-
-      // Claim.compareCounter = 0;
-      // var stopNode = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimEnd);
-      // var stopIndex = stopNode.index;
-      // console.log("stopNode",Claim.compareCounter,"comparisons",stopIndex);
-
-      // Claim.compareCounter = 0;
-      // var startNode = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimStart);
-      // var startIndex = startNode.index;
-      // console.log("startNode",Claim.compareCounter,"comparisons",startIndex);
-
-      // Claim.compareCounter = 0;
-      // while(startNode.value.compareFromTypeDateToClaimer(claimEnd) < 0)
-      // {
-      //   var claim = startNode.value;
-      //   console.log("At","i",startNode.index,"–",claim.idStr);
-
-      //   startNode = Claim.fromTypeToSet.findLeastGreaterThan(claim);
-      //   console.log("positioning Next",Claim.compareCounter,"comparisons");
-      //   Claim.compareCounter = 0;
-      // }
-
-
-      // Claim.compareCounter = 0;
-      // Claim.fromTypeToSet.splayIndex(stopNode.index);
-      // console.log("splayIndex stopNode",Claim.compareCounter,"comparisons",stopNode.index);
-
-      // Claim.compareCounter = 0;
-      // Claim.fromTypeToSet.splayIndex(startNode.index);
-      // console.log("splayIndex startNode",Claim.compareCounter,"comparisons",startNode.index);
-
-      // console.log("ss",startIndex,stopIndex);
-      // for(var i=startIndex;i<stopIndex;i++)
-      // {
-      //   // var claim = startNode.value;
-      //   // console.log("At","i",i,"–",claim.idStr);
-      //   resultCount++;
-
-      //   // Claim.compareCounter = 0;
-      //   // startNode = Claim.fromTypeToSet.findLeastGreaterThan(claim);
-      //   // console.log("positioning Next","i",i,"–",Claim.compareCounter,"comparisons");
-
-      //   // Claim.compareCounter = 0;
-      //   Claim.fromTypeToSet.splayIndex(i);
-      //   startNode = Claim.fromTypeToSet.root;
-      //   // console.log("positioning","i",i,"–",Claim.compareCounter,"comparisons");
-
-      //   // console.log("At",Claim.fromTypeToSet.root.index,Claim.fromTypeToSet.root.value.idStr);
-      // }
-
-      // var nodeStack = [startNode];
-      // while(startNode && startNode.value.compareFromTypeDateToClaimer(claimEnd) < 0)
-      // {
-      //   // var claim = startNode.value;
-      //   // console.log("At","i",startNode.index,"–",claim.idStr);
-      //   resultCount++;
-
-      //   if(startNode.right)
-      //   {
-      //     startNode = startNode.right;
-      //     while(startNode.left)
-      //     {
-      //       nodeStack.push(startNode);
-      //       startNode = startNode.left;
-      //     }
-      //   }
-      //   else startNode = nodeStack.pop();
-      // }
-
-      var claimIterator = makeClaimIterator(claimStart,claimEnd);
-      var claimsIn = {};
-      var lastDate = 0;
-      for(var claim of claimIterator)
-      {
-        if(claimsIn[claim.id]) console.error("!!!");
-        claimsIn[claim.id] = true;
-        console.log(claim.from.$('prettyString'),claim.type.$('prettyString'),valueToString(claim.to),claim.date.valueOf()-lastDate);
-        resultCount++;
-        lastDate = claim.date.valueOf();
-      }
-
-
-
-      console.log("TOTAL","comparisons",Claim.compareCounter,"results",resultCount,"duration",Date.now()-startTime);
-      console.log(from_.getFromType_nodes(type,false).length);
-
-
-/*
-
-0|semantic-graph-server  | TOTAL comparisons 155401 results 155355 duration 23
-
-0|semantic-graph-server  | TOTAL comparisons 780540 results 164067 duration 83
-0|semantic-graph-server  | TOTAL comparisons 164101 results 164067 duration 26
-
-
-
-0|semantic-graph-server  | stopNode 31 comparisons 30205
-0|semantic-graph-server  | startNode 15 comparisons 30200
-0|semantic-graph-server  | ss 30200 30205
-0|semantic-graph-server  | positioning i 30200 – 1 comparisons
-0|semantic-graph-server  | At 30200 2f1bc1eb 13d4c779 {"s":"dbr:Max_Tegmark"} d086fe37 1589404576877
-0|semantic-graph-server  | positioning i 30201 – 5 comparisons
-0|semantic-graph-server  | At 30201 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404576877
-0|semantic-graph-server  | positioning i 30202 – 3 comparisons
-0|semantic-graph-server  | At 30202 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404577066
-0|semantic-graph-server  | positioning i 30203 – 5 comparisons
-0|semantic-graph-server  | At 30203 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404576877
-0|semantic-graph-server  | positioning i 30204 – 3 comparisons
-0|semantic-graph-server  | At 30204 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404577066
-0|semantic-graph-server  | on WS client connection openned.
-
-
-0|semantic-graph-server  | stopNode 31 comparisons 30205
-0|semantic-graph-server  | startNode 15 comparisons 30200
-0|semantic-graph-server  | ss 30200 30205
-0|semantic-graph-server  | At i 30200 – 2f1bc1eb 13d4c779 {"s":"dbr:Max_Tegmark"} d086fe37 1589404576877
-0|semantic-graph-server  | positioning Next i 30200 – 2 comparisons
-0|semantic-graph-server  | At i 30201 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404576877
-0|semantic-graph-server  | positioning Next i 30201 – 6 comparisons
-0|semantic-graph-server  | At i 30202 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404577066
-0|semantic-graph-server  | positioning Next i 30202 – 4 comparisons
-0|semantic-graph-server  | At i 30203 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404576877
-0|semantic-graph-server  | positioning Next i 30203 – 6 comparisons
-0|semantic-graph-server  | At i 30204 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404577066
-0|semantic-graph-server  | positioning Next i 30204 – 4 comparisons
-
-
-0|semantic-graph-server  | startNode 33 comparisons 30200
-0|semantic-graph-server  | At i 30200 – 2f1bc1eb 13d4c779 {"s":"dbr:Max_Tegmark"} d086fe37 1589404576877
-0|semantic-graph-server  | positioning Next 3 comparisons
-0|semantic-graph-server  | At i 0 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404576877
-0|semantic-graph-server  | positioning Next 15 comparisons
-0|semantic-graph-server  | At i 0 – 2f1bc1eb 19c0f376 286186f7 d086fe37 1589404577066
-0|semantic-graph-server  | positioning Next 9 comparisons
-0|semantic-graph-server  | At i 0 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404576877
-0|semantic-graph-server  | positioning Next 9 comparisons
-0|semantic-graph-server  | At i 0 – 2f1bc1eb e63e7d79 bff16213 d086fe37 1589404577066
-0|semantic-graph-server  | positioning Next 7 comparisons
-
-
-
-
-*/
-
-      // var claims = Claim.fromTypeToSet.iterate(startNode.value,stopNode.value);
-
-
-
-
-
-      // // var claimStart = new Claim(new Node(from_.id.slice(0,7)+'0'),type,Node.one,Node.one,1);
-      // var claimStart = new Claim(from_,type,Node.zero,Node.zero,1);
-      // var claimEnd = new Claim(from_,type,Node.one,Node.one,8640000000000000);
-
-      // var start = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimStart);
-      // var stop = Claim.fromTypeToSet.findLeastGreaterThanOrEqual(claimEnd);
-      // claimStart = start.value;
-      // claimEnd = stop.value;
-
-      //   console.log(claimStart.idStr);
-      //   console.log(claimEnd.idStr);
-      //   console.log(" ");
-      //   console.log(Claim.fromTypeToSet.indexOf(claimStart));
-      //   console.log(Claim.fromTypeToSet.indexOf(claimEnd));
-      //   console.log(" ");
-      // // var claim0 = new Claim(Node.zero,Node.zero,Node.zero,Node.zero,1);
-      // // var claim1 = new Claim(Node.one,Node.one,Node.one,Node.one,8640000000000000);
-
-      // // Claim.fromTypeToSet.push(claim0);
-      // // Claim.fromTypeToSet.push(claim1);
-
-      // var claims = Claim.fromTypeToSet.slice(claimStart,claimEnd);
-
-      // // console.log(Claim.fromTypeToSet.indexOf(claim0));
-      // // console.log(Claim.fromTypeToSet.indexOf(claim1));
-      // // console.log(Claim.fromTypeToSet.indexOf(claimStart));
-      // // console.log(Claim.fromTypeToSet.indexOf(claimEnd));
-
-      // // Claim.fromTypeToSet.splay(claimStart);
-      // // var start = Claim.fromTypeToSet.root;
-      // while(start && start.value)
-      // {
-      //   console.log(start.value.idStr);
-      //   start = start.getNext();
-      // }
-
-
-      // // var start = Claim.fromTypeToSet;
-      // // start.splay(claimStart);
-      // // console.log(start.value.idStr);
-      // // start = start.getNext();
-      // // console.log(start.value.idStr);
-
-      // console.log(Claim.fromTypeToSet.length,claims.length);
-
-      // claims.next();
-
-      // while(!claims.done)
-      // {
-      //   var claim = claims.value;
-      //   console.log(claim.type.$('prettyString'),valueToString(claim.to));
-      //   claims.next();
-      // }
-      // claims.forEach(claim=>
-      // {
-      //   console.log(claim.type.$('prettyString'),valueToString(claim.to));
-      // })
-
-      // console.log(Claim.fromTypeToSet.min().idStr);
-      // console.log(Claim.fromTypeToSet.max().idStr);
-    }
-
-
+    // await recompactClaimsOnDisk();
 
     // await importFromDBPedia();
 
-    // ['occupation:philosopher','occupation:cosmologist','occupation:scientist',].forEach(strid=>
-    // {
-    //   var occupation = $$(strid);
-    //   occupation.$froms('person.occupations').forEach(p=>p.delete());
-    // })
+
+    
+    initNameMaps();
+
+    var totalFound = 0;
+    // if(false)
+    $$('YoutubeVideo').$froms('object.instanceOf').forEach(video=>
+    {
+      if(totalFound >= 3) return;
+      findTextualMention(video,$$('YoutubeVideo.title'));
+      totalFound++;
+      return;
 
 
+      var title = video.$('YoutubeVideo.title');
+      var description = video.$('YoutubeVideo.description');
+      // var splitter = /[ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\'\"\|\~\`\_\-\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+/;
+      var splitter = /[ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\"\|\~\`\_\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+/;
+      // var titleWords = title.split(splitter);
+      if(!_.isString(description)) return;
+      var titleWords = description.split(splitter);
+      var foundGivenNames = titleWords.map((w,i)=>givenNamesMap[w] ? ({str:w,index:i}) : undefined).filter(o=>o);
+      for(var {str,index} of foundGivenNames)
+      {
+        var matches = [];
+        var people = givenNamesMap[str].$froms('person.givenName');
+        for(var person of people)
+        {
+          if(person.strid == 'dbr:Brain_(comics)') continue;
+          if(person.strid == 'dbr:Cosmos') continue;
+          if(person.strid == 'dbr:Julian_(emperor)') continue;
+          if(person.strid == 'dbr:Steel_(John_Henry_Irons)') continue;
+          if(person.strid == 'dbr:Melissa_(philosopher)') continue;
+          if(person.strid == 'dbr:Scientist') continue;
+          if(person.strid == 'dbr:Big_Bang') continue;
+          if(person.strid == 'dbr:Crusher_(comics)') continue;
+          if(person.strid == 'dbr:Hippo_(philosopher)') continue;
+          if(person.strid == 'dbr:Lucy_(chimpanzee)') continue;
+          if(person.strid == 'dbr:Yi_I') continue;
+          if(person.strid == 'dbr:Joker_(comics)') continue;
+          if(person.strid == 'dbr:Horace') continue;
+          if(person.strid == 'dbr:Ismail_II') continue;
+          if(person.strid == 'dbr:Rumi') continue;
+          if(person.strid == 'dbr:Horus_(athlete)') continue;
+          if(person.strid == 'dbr:Pandemic_(comics)') continue;
+          if(person.strid == 'dbr:') continue;
+          if(person.strid == 'dbr:') continue;
+          if(person.strid == 'dbr:') continue;
+
+          var surname = person.$('person.surname');
+          surname = surname && surname.$('title');
+          var middleName = person.$('person.middleGivenName') || person.$('person.middleSurname');
+          middleName = middleName && middleName.$('title');
+          if(!surname)
+          {
+            matches.push({person,score:1});
+            continue;
+          }
+          if(!titleWords[index+1]) continue;
+
+          var foundMiddleName = middleName && titleWords[index+1] == middleName;
+          var foundSurname1 = !foundMiddleName && surname && titleWords[index+1] == surname;
+          var foundSurname2 = titleWords[index+2] && titleWords[index+2] == surname;
+
+          if(foundMiddleName && foundSurname2)
+          {
+            matches.push({person,score:3});
+            continue;
+          }
+          if(foundSurname1)
+          {
+            matches.push({person,score: middleName ? 1 : 2 });
+            continue;
+          }
+
+          // console.log(_.padEnd(str,18),_.padEnd(surname||'',18),title);
+          // totalFound++;
+        }
+        if(matches.length == 0) continue;
+        matches = _.sortBy(matches,match=>-match.score);
+        var {person,score} = matches[0];
+        console.log(_.padEnd(person.$('title'),40),_.padEnd(score,3),_.padEnd(title,102),person.strid);
+      }
+    });
 
 
     return;
 
-
-    var people = $$('person').$froms('object.instanceOf');
-    for(var person of people)
+    var people = _.shuffle($$('person').$froms('object.instanceOf'));
+    if(true)
+    // for(var person of people)
+    for(var i=0;i<people.length;i++)
+    // for(var i=0;i<10;i++)
     {
-      if(person == _kaielvin) continue;
-
-      var json = await fetchOrGetCachedDbpediaJson(person);
-      var resource = json['http://dbpedia.org/resource/'+person.strid.substring(4)];
-      var labels = resource['http://www.w3.org/2000/01/rdf-schema#label'];
-      var labelEn = _.find(labels,label=>label.lang == 'en');
-      // console.log(labelEn);
-      if(!labelEn) console.error(_.padEnd(person.strid,30), "No EN label");
-      else
-      {
-        var label = labelEn.value;
-        var braketMatch = label.match(/^([^(]+)(\(.*|)$/);
-        label = _.trim(braketMatch[1]);
-        var names = label.split(' ');
-        console.log(_.padEnd(person.strid,40), label);
-      }
-
-
-      // var fileName = person.strid.substring(4)+".json"
-      // var cacheFileName = './cache/dbpedia/'+fileName;
-      // if(fs.existsSync(cacheFileName)) continue;
-      // console.log(cacheFileName);
-
-      // const { stdout, stderr } = await exec('cd ./cache/dbpedia/; wget "http://dbpedia.org/data/'+fileName+'"');
-      // break;
-
-      // var streamC2 = fs.createWriteStream(cacheFileName, {flags:'a',encoding: 'utf8'});
-      // streamC2.write('.');
-      // streamC2.close();
-      // console.log("http://dbpedia.org/data/"+fileName);
+      var person = people[i];
+      while(_treatPerson_lock) await _treatPerson_lock;
+      treatPerson(person,i/people.length);
     }
 
+    return;
+
+
+
+    // {
+    //   if(person == _kaielvin) continue;
+
+    //   // person.delete(); // killing everyone (but myself)
+
+    //   var json = await fetchOrGetCachedDbpediaJson(person);
+    //   var resource = json['http://dbpedia.org/resource/'+person.strid.substring(4)];
+    //   var labels = resource['http://www.w3.org/2000/01/rdf-schema#label'];
+    //   var labelEn = _.find(labels,label=>label.lang == 'en');
+    //   // console.log(labelEn);
+    //   if(!labelEn) console.error(_.padEnd(person.strid,30), "No EN label");
+    //   else
+    //   {
+    //     var label = labelEn.value;
+    //     var braketMatch = label.match(/^([^(]+)(\(.*|)$/);
+    //     label = _.trim(braketMatch[1]);
+    //     label = label.replace(/,/g,'');
+    //     var names = label.split(' ');
+    //     var data = {};
+    //     do
+    //     {
+    //       data.givenName = names.shift();
+    //       if(names.length == 0) break;
+    //       data.surname = names.pop();
+    //       if(names.length == 0) break;
+    //       if(_.lowerCase(data.surname) == 'jr')
+    //       {
+    //         data.suffix = 'Jr';
+    //         data.surname = names.pop();
+    //       }
+    //       if(_.lowerCase(data.surname).match(/^i+$/))
+    //       {
+    //         data.suffix = _.fill(Array(data.surname.length), 'I').join('');
+    //         data.surname = names.pop();
+    //       }
+
+    //     } while(false);
+
+    //     console.log(_.padEnd(person.strid,40), _.padEnd(label,37), _.padEnd(data.givenName,18), _.padEnd(data.surname||'',18), _.padEnd(data.suffix||'',5));
+    //   }
+
+    //   // var fileName = person.strid.substring(4)+".json"
+    //   // var cacheFileName = './cache/dbpedia/'+fileName;
+    //   // if(fs.existsSync(cacheFileName)) continue;
+    //   // console.log(cacheFileName);
+
+    //   // const { stdout, stderr } = await exec('cd ./cache/dbpedia/; wget "http://dbpedia.org/data/'+fileName+'"');
+    //   // break;
+
+    //   // var streamC2 = fs.createWriteStream(cacheFileName, {flags:'a',encoding: 'utf8'});
+    //   // streamC2.write('.');
+    //   // streamC2.close();
+    //   // console.log("http://dbpedia.org/data/"+fileName);
+    // }
+
+
+    console.log('');
+    console.log('');
+
+    var youtubeVideos = $$('YoutubeVideo').$froms('object.instanceOf');
+    console.log(youtubeVideos.length);
+    if(false)
+    for(var youtubeVideo of youtubeVideos)
+    {
+      var title = youtubeVideo.$('title');
+      if(title.includes('Dan'))
+        console.log(title);
+    }
+
+
+    // var count1 = Claim.count;
+    // var count2 = [...Claim.makeOverallClaimIterator()].length;
+
+    // var count1b = Claim.count;
+    // var count2b = [...Claim.makeOverallClaimIterator()].length;
+
+    // console.log(count1,count2,count1b,count2b);
 
     return;
 
@@ -1109,9 +1188,9 @@ async function importFromDBPedia()
 
   const propertiesByPrefix = {
     dbc:['dct:subject'],
-    dbo:['dct:type'],
-    yago:['dct:type'],
-    "umbel-rc":['dct:type'],
+    dbo:['dct:type','rdf:type'],
+    yago:['dct:type','rdf:type'],
+    "umbel-rc":['dct:type','rdf:type'],
     dbr:['dbo:knownFor','dbo:mainInterest','dbp:occupation','dbo:field'],
   }
 
@@ -1122,11 +1201,14 @@ async function importFromDBPedia()
     'cosmologist':['dbr:Cosmology',
       'yago:Cosmologist109819667',
       'dbc:Cosmologists','dbc:Philosophy_of_astronomy','dbc:Physical_cosmology','dbr:Philosophers_of_cosmology'],
-    'scientist':['dbr:Science','dbr:Physicist','umbel-rc:Scientist',
+    'scientist':[
+        'dbr:Science','dbr:Physicist','umbel-rc:Scientist',
       'yago:Scientist110560637',
       'yago:Physicist110428004',
       'dbo:Scientist',
-      'dbc:Scientists'],
+      'dbc:Scientists'
+    ],
+    'psychologist':['dbr:Psychology'],
   };
 
 
@@ -1171,7 +1253,9 @@ async function importFromDBPedia()
         {
           var strid = "dbr:"+_.last(dbpediaUrl.split('/'));
           console.log("      + "+strid);
-          var node = Node.makeByStrid(strid)
+          var node = Node.getByStrid(strid);
+          if(node) return; // created already
+          node = Node.makeByStrid(strid)
             .$(_instanceOf,"person")
             .$('occupations','occupation:'+category);
 
