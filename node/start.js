@@ -18,7 +18,7 @@ var MiniSearch = MiniSearch || require('minisearch'); // already defined on the 
 
 var _ = require('lodash');
 var {ServerContext,fulltextSearch,resetFulltextSearchObject,
-  randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
+  randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,_classes,_supClasses,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,
   garbageCollect,_stridClaims} = require('./public/core.js');
@@ -328,22 +328,52 @@ app.use(express.static('public'))
 
 app.get('/all', (req, res) =>
 {
-  var excludedInstanciable = [
-    $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
-    $$('person'),$$('givenName'),$$('surname'),$$('textualMention'),
-    $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
-  console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
-  // TODO use the main ClaimStore
   var claimStore = new ClaimStore();
-  for(var fromId in _idToNodeIndex)
+
+  // keep in sync with object.neededAsCore(), this implementation is faster
+
+  var excludedClasses = [ // from coreNodes
+    $$('person'),
+    $$('resolvable'),
+    $$('collection'),
+    $$('descriptorTo'),$$('descriptorFrom'), // legacy
+  ];
+
+  $$('coreNodes').$froms('object.tags').forEach(coreNode=>
   {
-    var node = Node.makeById(fromId);
-    var instanciable = node.$(_instanceOf);
-    // console.log("GET /all",instanciable&&instanciable.$('prettyString'),instanciable && excludedInstanciable.includes(instanciable));
-    if(instanciable && excludedInstanciable.includes(instanciable) && node != _kaielvin)
-      continue;
-    claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
-  }
+    claimStore.addAllNodeClaims(coreNode);
+    var classes = coreNode.$(_classes);
+    console.log("GET /all","adding",coreNode.$('prettyString'),classes.map(c=>c.name).join());
+    if(classes.includes(_instanciable))
+    {
+      var supClasses = coreNode.$(_supClasses);
+      console.log("GET /all","supClasses:",supClasses.map(c=>c.name).join());
+      if(!excludedClasses.some(excludedClass=> supClasses.includes(excludedClass) ))
+        coreNode.$froms(_instanceOf).forEach(node=>
+        {
+          claimStore.addAllNodeClaims(node);
+          console.log("GET /all","adding",node.$('prettyString'));
+        });
+    }
+  })
+
+
+  // var excludedInstanciable = [
+  //   $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
+  //   $$('person'),$$('givenName'),$$('surname'),$$('textualMention'),
+  //   $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
+  // console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
+  // // TODO use the main ClaimStore
+  // var claimStore = new ClaimStore();
+  // for(var fromId in _idToNodeIndex)
+  // {
+  //   var node = Node.makeById(fromId);
+  //   var instanciable = node.$(_instanceOf);
+  //   // console.log("GET /all",instanciable&&instanciable.$('prettyString'),instanciable && excludedInstanciable.includes(instanciable));
+  //   if(instanciable && excludedInstanciable.includes(instanciable) && node != _kaielvin)
+  //     continue;
+  //   claimStore.addAllNodeClaims(_idToNodeIndex[fromId]);
+  // }
   res.send({compactJson:claimStore.toCompactJson()});
 
   // res.send({nodes:_.values(_idToNodeIndex).map(node=>nodeToJson(node))});
@@ -970,9 +1000,9 @@ async function findTextualMention(inNode,inField)
 
 if(true) (async ()=>
 {
-    // garbageCollect();
-    // await recompactClaimsOnDisk();
-    // await importWatchings();
+    garbageCollect();
+    await recompactClaimsOnDisk();
+    await importWatchings();
 
     // await importFromDBPedia();
 

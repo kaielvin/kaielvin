@@ -815,9 +815,12 @@ document.addEventListener('keydown', async e => {
 
 
 
-  if(!c&&!s&& e.key == 'Enter' && inputHasFocus)
+  // if(!c&&!s&& e.key == 'Enter' && inputHasFocus)
+  // {
+  //   console.log('Enter while in searchInput');
+  if(!c&&!s&& e.key == 'Enter' && selectedInstanciable == $$('collection') && selectedMethod == 'page')
   {
-    console.log('Enter while in searchInput');
+    console.log('Enter while showing collection');
     clearHeaderSearch();
     if (document.activeElement)
         document.activeElement.blur();
@@ -1622,7 +1625,7 @@ var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring
 
   var _garbageCollect = ()=>garbageCollect([$$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching')]);
   // setInterval(_garbageCollect, 10000);
-  // _garbageCollect();
+  _garbageCollect();
 
   // var playlist = await fetchYoutubePlaylists('UCDDe2Yh15Yj4ljU_2f311mQ');
   // fetchYoutubePlaylist('PLfoEg9YVcQQS14MaRPjRdYM_Y-HwoQFPJ');
@@ -1660,16 +1663,30 @@ function initEditor(value,id="codeEditor",floating=true)
     mode:  "javascript",
     extraKeys: {"Ctrl-Space": "autocomplete",
                 "Ctrl-/": "toggleComment",
+                "Tab": "indentMore",
+                "Shift-Tab": "indentLess",
               },
     lineWrapping: true,
     lineNumbers: true,
     // autofocus: true,
     cursorScrollMargin: 2, // doesn't seem to work
+    indentUnit: 2,
+    tabSize: 2,
+    indentWithTabs: false,
+    // smartIndent: false,
     spellcheck: true,
     autocorrect: true,
     theme: "material-darker",
     scrollbarStyle: "overlay",
   });
+
+  // map the Tab key to insert spaces instead of a tab character.
+  // myCodeMirror.setOption("extraKeys", {
+  //   Tab: function(cm) {
+  //     var spaces = Array(cm.getOption("indentUnit") + 1).join(" ");
+  //     cm.replaceSelection(spaces);
+  //   }
+  // });
 
   myCodeMirrorUnsaved = false;
   myCodeMirror.on('change',()=> myCodeMirrorUnsaved = true);

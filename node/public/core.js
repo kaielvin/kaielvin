@@ -180,6 +180,8 @@ class ClaimStore
     // this.idPosIndex = {}; // used to remove quickly
     this.idIndex = {};
     this.addClaim = this.addClaim.bind(this);
+
+    this.addAllNodeClaims = this.addAllNodeClaims.bind(this);
   }
   get length()
   {
@@ -1385,14 +1387,14 @@ function importClaims(compactJson)
 
 function garbageCollect(extraGarbageCollectables=[])
 {
-  var garbageCollectables = [
-    $$('descriptorIntersection'),$$('descriptorTo'),$$('descriptorFrom'),$$('descriptorDifference'),
-    $$('collection'),$$('descriptorFullTextSearch'),
-    $$('accessorTo'),$$('accessorFrom'),
-    $$('variable'),$$('uniqueBy'),$$('sort')];
-  garbageCollectables.push(...extraGarbageCollectables);
-  var keptInstanciables = $$('instanciable').$froms('object.instanceOf');
-  keptInstanciables = _.without(keptInstanciables,...garbageCollectables);
+  // var garbageCollectables = [
+  //   $$('descriptorIntersection'),$$('descriptorTo'),$$('descriptorFrom'),$$('descriptorDifference'),
+  //   $$('collection'),$$('descriptorFullTextSearch'),
+  //   $$('accessorTo'),$$('accessorFrom'),
+  //   $$('variable'),$$('uniqueBy'),$$('sort')];
+  // garbageCollectables.push(...extraGarbageCollectables);
+  // var keptInstanciables = $$('instanciable').$froms('object.instanceOf');
+  // keptInstanciables = _.without(keptInstanciables,...garbageCollectables);
   var instanciableClaimTypes = {};
   var getClaimTypes = instanciable=>
   {
@@ -1409,7 +1411,7 @@ function garbageCollect(extraGarbageCollectables=[])
     if(saveNodeMap[node.id]) return; // saved already
     saveNodeMap[node.id] = node;
     var classes = instanciable ? instanciable.$(_supClasses) : node.$(_classes);
-    if(classes.length <= 1) console.error ("Node with only one class",node.id,node.name,classes.map(c=>c.name).join());
+    // if(classes.length <= 1) console.error ("Node with only one class",node.id,node.name,classes.map(c=>c.name).join());
 
     for(var class_ of classes)
     {
@@ -1444,22 +1446,27 @@ function garbageCollect(extraGarbageCollectables=[])
     // }
   }
 
-  [_object,_undefined,_anything,_class,_abstractClass].forEach(node=>saveNode(node));
+  // [_object,_undefined,_anything,_class,_abstractClass].forEach(node=>saveNode(node));
 
-  for(var instanciable of keptInstanciables)
+  // for(var instanciable of keptInstanciables)
+  // {
+  //    var instances = instanciable.$froms(_instanceOf);
+  //   console.log("Keeping",instanciable.$('prettyString'),instances.length);
+  //   for(var node of instances) saveNode(node,instanciable);
+  //   // var toClaimTypes = _.concat(instanciable.$froms('claimType.typeFrom'),_object.$froms('claimType.typeFrom'))
+  //   //   .filter(claimType=>claimType.$('functional') != $$('true'));
+  //   // for(var claimType of toClaimTypes)
+  //   //    console.log("    … ",claimType.$('prettyString'));
+  // }
+
+  _.values(_idToNodeIndex).forEach(node=>
   {
-     var instances = instanciable.$froms(_instanceOf);
-    console.log("Keeping",instanciable.$('prettyString'),instances.length);
-    for(var node of instances) saveNode(node,instanciable);
-    // var toClaimTypes = _.concat(instanciable.$froms('claimType.typeFrom'),_object.$froms('claimType.typeFrom'))
-    //   .filter(claimType=>claimType.$('functional') != $$('true'));
-    // for(var claimType of toClaimTypes)
-    //    console.log("    … ",claimType.$('prettyString'));
-  }
+    if(node.$('isGarbageCollectable') != _true) saveNode(node);
+  })
 
   var garbageCollected = _.values(_idToNodeIndex).filter(node=>!saveNodeMap[node.id]);
-  for(var node of garbageCollected)
-    if(!garbageCollectables.includes(node.$(_instanceOf))) console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
+  // for(var node of garbageCollected)
+  //   if(!garbageCollectables.includes(node.$(_instanceOf))) console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
   // for(var node of garbageCollected)
   //   if(node.strid) console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
 
@@ -1477,7 +1484,7 @@ function garbageCollect(extraGarbageCollectables=[])
 
 
 module.exports = {ServerContext,fulltextSearch,resetFulltextSearchObject,
-  randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,
+  randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,_classes,_supClasses,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,
   garbageCollect,
