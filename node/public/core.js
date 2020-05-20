@@ -69,10 +69,10 @@ var randHex = function(len=8) {
 var valueToString = value=>
        !value                 ? 'undefined'
       : value instanceof Node ? value.name
-      : value.u               ? 'unset'
-      : value.s               ? 's_'+value.s
+      : value.u !== undefined ? 'unset'
+      : value.s !== undefined ? 's_'+value.s
       // : value.b               ? 'b_'+value.b
-      : value.n               ? 'n_'+value.n
+      : value.n !== undefined ? 'n_'+value.n
       :                         'j_';
       // : value.j               ? 'j_'
       // :                         'b_'+value.b;
@@ -813,6 +813,18 @@ class Node
   $ex(method,...args)
   {
     method = strToType(method,this);
+    var _function = method.getFromType_to(_fieldFunction);
+    if(_function)
+    {
+      var expression = _function.$(_functionExpr);
+      if(expression)
+      {
+        var context = {};
+        var variable = _function.$(_functionVar);
+        if(variable) context[variable.id] = [this];
+        return expression.$ex('resolve',context);
+      }
+    }
     var jsMethod = method.getFromType_to(_resolve);
     // console.log("$ex",String(jsMethod.j))
     if(!(jsMethod instanceof Object)) return undefined;
@@ -966,6 +978,9 @@ var _anything       = Node.makeById('f0cfe989');
 var _instanceOf     = Node.makeById('19c0f376');
 var _instanciable   = Node.makeById('ce0b87e4');
 var _claimType      = Node.makeById('50fd3931');
+var _fieldFunction  = Node.makeById('dafc06f4');
+var _functionVar    = Node.makeById('a7af3fc9');
+var _functionExpr   = Node.makeById('31552381');
 var _typeFrom       = Node.makeById('59f08f21');
 var _typeTo         = Node.makeById('6d252ccf');
 var _jsMethod       = Node.makeById('291f3841');
@@ -1214,11 +1229,11 @@ function $$(i1,i2,i3,i4)
 var valueToHtml = value=>
   value instanceof Node ? $$(value,'object.link')
       : value === undefined ? 'undefined'
-      : value.u ? 'undefined'
-      : value.n ? ''+value.n
+      : value.u !== undefined ? 'undefined'
+      : value.n !== undefined ? ''+value.n
       // : value.b ? (value.b?'true':'false')
-      : value.s ? '"'+value.s+'"'
-      : value.j ? '*function:l='+String(value.j).split('\n').length+'*'
+      : value.s !== undefined ? '"'+value.s+'"'
+      : value.j !== undefined ? '*function:l='+String(value.j).split('\n').length+'*'
       // : value.b != undefined ? (value.b?'true':'false')
       : value; // should be number
 
@@ -1232,10 +1247,11 @@ Context.resolveVariable = function(variable)
 
 function instanciate(instanciable,...typeTos)
 {
-  instanciable = resolveIntoNode(instanciable);
-  typeTos.forEach(v=>v[0] = strToType(v[0],undefined,instanciable.$(_supClasses)));
-  typeTos.unshift([_instanceOf,instanciable]);
-  // console.log("instanciate()",instanciable.name,typeTos);
+  var instanciableNode = resolveIntoNode(instanciable);
+  if(!instanciableNode) throw new Error("unknown _instanciable"+(_.isString(instanciable)?': '+instanciable:''));
+  typeTos.forEach(v=>v[0] = strToType(v[0],undefined,instanciableNode.$(_supClasses)));
+  typeTos.unshift([_instanceOf,instanciableNode]);
+  // console.log("instanciate()",instanciableNode.name,typeTos);
   return makeUnique(typeTos);
 }
 Node.instanciate = instanciate;

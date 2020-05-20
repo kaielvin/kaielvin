@@ -74,7 +74,7 @@ h1 small
 #app > .left
 {
   flex: 8;
-  padding: 8px;
+  padding: 16px;
 }
 #app > .right
 {
@@ -750,7 +750,7 @@ function clearHeaderSearch()
 
 
 
-const LinkShortcuts = "0123456789abcdefghijklmnopqrstuvwxyz";
+const LinkShortcuts = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 var showingLinkShortcuts = false;
 var idToShortcut;
 var shortcutToId;
@@ -1326,7 +1326,7 @@ var goToObject = async (node,method=undefined,throttled=false)=>
   if(!method) method = defaultMethod;
   if(method != defaultMethod)
     hash+= '/'+method;
-  if(throttled)
+  if(throttled || selectedMethod == 'resolvablesView')
   {
     history.replaceState(null,null,'#'+hash);
     showObject(node);

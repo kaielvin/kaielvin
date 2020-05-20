@@ -330,7 +330,7 @@ app.get('/all', (req, res) =>
 {
   var excludedInstanciable = [
     $$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching'),
-    $$('person'),$$('givenName'),$$('surname'),
+    $$('person'),$$('givenName'),$$('surname'),$$('textualMention'),
     $$('descriptorTo'),$$('descriptorFrom'),$$('descriptorFullTextSearch')];
   console.log("GET /all",'excludes',excludedInstanciable.map(i=>i.$('prettyString')).join());
   // TODO use the main ClaimStore
@@ -882,167 +882,109 @@ async function findTextualMention(inNode,inField)
 {
   var text = inNode.$(inField);
   if(!_.isString(text)) return;
-  // var splitter = /[ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\'\"\|\~\`\_\-\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+/;
   var splitter = /([ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\"\|\~\`\_\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]*)([^ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\"\|\~\`\_\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+)/g;
+  var pos = 0;
+  var wordsPos = [...text.matchAll(splitter)].map(([full,separator,word])=>
+  {
+    pos+= full.length;
+    return {word,pos:pos-word.length};
+  });
   // var words = text.split(splitter);
-  console.log(splitter.match(text));
+  // console.log(text);
+  // console.log(JSON.stringify([...text.matchAll(splitter)]));
 
   // ### searching for people ###
-  // var foundGivenNames = words.map((w,i)=>givenNamesMap[w] ? ({str:w,index:i}) : undefined).filter(o=>o);
-  // for(var {str,index} of foundGivenNames)
-  // {
-  //   var matches = [];
-  //   var people = givenNamesMap[str].$froms('person.givenName');
-  //   for(var person of people)
-  //   {
-  //     if(person.strid == 'dbr:Brain_(comics)') continue;
-  //     if(person.strid == 'dbr:Cosmos') continue;
-  //     if(person.strid == 'dbr:Julian_(emperor)') continue;
-  //     if(person.strid == 'dbr:Steel_(John_Henry_Irons)') continue;
-  //     if(person.strid == 'dbr:Melissa_(philosopher)') continue;
-  //     if(person.strid == 'dbr:Scientist') continue;
-  //     if(person.strid == 'dbr:Big_Bang') continue;
-  //     if(person.strid == 'dbr:Crusher_(comics)') continue;
-  //     if(person.strid == 'dbr:Hippo_(philosopher)') continue;
-  //     if(person.strid == 'dbr:Lucy_(chimpanzee)') continue;
-  //     if(person.strid == 'dbr:Yi_I') continue;
-  //     if(person.strid == 'dbr:Joker_(comics)') continue;
-  //     if(person.strid == 'dbr:Horace') continue;
-  //     if(person.strid == 'dbr:Ismail_II') continue;
-  //     if(person.strid == 'dbr:Rumi') continue;
-  //     if(person.strid == 'dbr:Horus_(athlete)') continue;
-  //     if(person.strid == 'dbr:Pandemic_(comics)') continue;
-  //     if(person.strid == 'dbr:') continue;
-  //     if(person.strid == 'dbr:') continue;
-  //     if(person.strid == 'dbr:') continue;
+  initNameMaps();
+  var foundGivenNames = wordsPos.map(({word,pos},i)=>givenNamesMap[word] ? ({word,pos,wordIndex:i}) : undefined).filter(o=>o);
+  for(var {word,pos,wordIndex} of foundGivenNames)
+  {
+    var matches = [];
+    var people = givenNamesMap[word].$froms('person.givenName');
+    for(var person of people)
+    {
+      if(person.strid == 'dbr:Brain_(comics)') continue;
+      if(person.strid == 'dbr:Cosmos') continue;
+      if(person.strid == 'dbr:Julian_(emperor)') continue;
+      if(person.strid == 'dbr:Steel_(John_Henry_Irons)') continue;
+      if(person.strid == 'dbr:Melissa_(philosopher)') continue;
+      if(person.strid == 'dbr:Scientist') continue;
+      if(person.strid == 'dbr:Big_Bang') continue;
+      if(person.strid == 'dbr:Crusher_(comics)') continue;
+      if(person.strid == 'dbr:Hippo_(philosopher)') continue;
+      if(person.strid == 'dbr:Lucy_(chimpanzee)') continue;
+      if(person.strid == 'dbr:Yi_I') continue;
+      if(person.strid == 'dbr:Joker_(comics)') continue;
+      if(person.strid == 'dbr:Horace') continue;
+      if(person.strid == 'dbr:Ismail_II') continue;
+      if(person.strid == 'dbr:Rumi') continue;
+      if(person.strid == 'dbr:Horus_(athlete)') continue;
+      if(person.strid == 'dbr:Pandemic_(comics)') continue;
+      if(person.strid == 'dbr:') continue;
+      if(person.strid == 'dbr:') continue;
+      if(person.strid == 'dbr:') continue;
 
-  //     var surname = person.$('person.surname');
-  //     surname = surname && surname.$('title');
-  //     var middleName = person.$('person.middleGivenName') || person.$('person.middleSurname');
-  //     middleName = middleName && middleName.$('title');
-  //     if(!surname)
-  //     {
-  //       matches.push({person,score:1});
-  //       continue;
-  //     }
-  //     if(!words[index+1]) continue;
+      var surname = person.$('person.surname');
+      surname = surname && surname.$('title');
+      var middleName = person.$('person.middleGivenName') || person.$('person.middleSurname');
+      middleName = middleName && middleName.$('title');
+      if(!surname)
+      {
+        matches.push({person,pos,score:1});
+        continue;
+      }
+      var nextWord = wordsPos[wordIndex+1];
+      if(!nextWord) continue;
+      nextWord = nextWord && nextWord.word;
+      var nextNextWord = wordsPos[wordIndex+2];
+      nextNextWord = nextNextWord && nextNextWord.word;
 
-  //     var foundMiddleName = middleName && words[index+1] == middleName;
-  //     var foundSurname1 = !foundMiddleName && surname && words[index+1] == surname;
-  //     var foundSurname2 = words[index+2] && words[index+2] == surname;
+      var foundMiddleName = middleName && nextWord == middleName;
+      var foundSurname1 = !foundMiddleName && surname && nextWord == surname;
+      var foundSurname2 = nextNextWord && nextNextWord == surname;
 
-  //     if(foundMiddleName && foundSurname2)
-  //     {
-  //       matches.push({person,score:3});
-  //       continue;
-  //     }
-  //     if(foundSurname1)
-  //     {
-  //       matches.push({person,score: middleName ? 1 : 2 });
-  //       continue;
-  //     }
+      if(foundMiddleName && foundSurname2)
+      {
+        matches.push({person,pos,score:3});
+        continue;
+      }
+      if(foundSurname1)
+      {
+        matches.push({person,pos,score: middleName ? 1 : 2 });
+        continue;
+      }
 
-  //     // console.log(_.padEnd(str,18),_.padEnd(surname||'',18),title);
-  //     // totalFound++;
-  //   }
-  //   if(matches.length == 0) continue;
-  //   matches = _.sortBy(matches,match=>-match.score);
-  //   var {person,score} = matches[0];
-  //   console.log(_.padEnd(person.$('title'),40),_.padEnd(score,3),_.padEnd(title,102),person.strid);
-
+      // console.log(_.padEnd(str,18),_.padEnd(surname||'',18),title);
+      // totalFound++;
+    }
+    if(matches.length > 0)
+    {
+      matches = _.sortBy(matches,match=>-match.score);
+      var {person,pos,score} = matches[0];
+      console.log(_.padEnd(person.$('title'),40),_.padEnd(score,3),_.padEnd(text,102),person.strid);
+      var mention = Node.instanciate('textualMention',['in',inNode],['inField',inField],['of',person],['atCharacter',{n:pos}]);
+      if(mention.$('score') != score) mention.$('score',{n:score});
+    }
+  }
 }
 
 
 if(true) (async ()=>
 {
-    garbageCollect();
+    // garbageCollect();
     // await recompactClaimsOnDisk();
+    // await importWatchings();
 
     // await importFromDBPedia();
 
-
-    
-    initNameMaps();
-
     var totalFound = 0;
-    // if(false)
+    if(false)
+    // _.shuffle($$('YoutubeVideo').$froms('object.instanceOf')).forEach(video=>
     $$('YoutubeVideo').$froms('object.instanceOf').forEach(video=>
     {
-      if(totalFound >= 3) return;
+      // if(totalFound >= 100) return;
       findTextualMention(video,$$('YoutubeVideo.title'));
+      findTextualMention(video,$$('YoutubeVideo.description'));
       totalFound++;
-      return;
-
-
-      var title = video.$('YoutubeVideo.title');
-      var description = video.$('YoutubeVideo.description');
-      // var splitter = /[ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\'\"\|\~\`\_\-\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+/;
-      var splitter = /[ \!\@\#\$\%\^\&\*\)\(\+\=\.\<\>\{\}\[\]\:\;\"\|\~\`\_\,\—\–\±\−\÷×\×\≠\…\¡\¿\`\n\t]+/;
-      // var titleWords = title.split(splitter);
-      if(!_.isString(description)) return;
-      var titleWords = description.split(splitter);
-      var foundGivenNames = titleWords.map((w,i)=>givenNamesMap[w] ? ({str:w,index:i}) : undefined).filter(o=>o);
-      for(var {str,index} of foundGivenNames)
-      {
-        var matches = [];
-        var people = givenNamesMap[str].$froms('person.givenName');
-        for(var person of people)
-        {
-          if(person.strid == 'dbr:Brain_(comics)') continue;
-          if(person.strid == 'dbr:Cosmos') continue;
-          if(person.strid == 'dbr:Julian_(emperor)') continue;
-          if(person.strid == 'dbr:Steel_(John_Henry_Irons)') continue;
-          if(person.strid == 'dbr:Melissa_(philosopher)') continue;
-          if(person.strid == 'dbr:Scientist') continue;
-          if(person.strid == 'dbr:Big_Bang') continue;
-          if(person.strid == 'dbr:Crusher_(comics)') continue;
-          if(person.strid == 'dbr:Hippo_(philosopher)') continue;
-          if(person.strid == 'dbr:Lucy_(chimpanzee)') continue;
-          if(person.strid == 'dbr:Yi_I') continue;
-          if(person.strid == 'dbr:Joker_(comics)') continue;
-          if(person.strid == 'dbr:Horace') continue;
-          if(person.strid == 'dbr:Ismail_II') continue;
-          if(person.strid == 'dbr:Rumi') continue;
-          if(person.strid == 'dbr:Horus_(athlete)') continue;
-          if(person.strid == 'dbr:Pandemic_(comics)') continue;
-          if(person.strid == 'dbr:') continue;
-          if(person.strid == 'dbr:') continue;
-          if(person.strid == 'dbr:') continue;
-
-          var surname = person.$('person.surname');
-          surname = surname && surname.$('title');
-          var middleName = person.$('person.middleGivenName') || person.$('person.middleSurname');
-          middleName = middleName && middleName.$('title');
-          if(!surname)
-          {
-            matches.push({person,score:1});
-            continue;
-          }
-          if(!titleWords[index+1]) continue;
-
-          var foundMiddleName = middleName && titleWords[index+1] == middleName;
-          var foundSurname1 = !foundMiddleName && surname && titleWords[index+1] == surname;
-          var foundSurname2 = titleWords[index+2] && titleWords[index+2] == surname;
-
-          if(foundMiddleName && foundSurname2)
-          {
-            matches.push({person,score:3});
-            continue;
-          }
-          if(foundSurname1)
-          {
-            matches.push({person,score: middleName ? 1 : 2 });
-            continue;
-          }
-
-          // console.log(_.padEnd(str,18),_.padEnd(surname||'',18),title);
-          // totalFound++;
-        }
-        if(matches.length == 0) continue;
-        matches = _.sortBy(matches,match=>-match.score);
-        var {person,score} = matches[0];
-        console.log(_.padEnd(person.$('title'),40),_.padEnd(score,3),_.padEnd(title,102),person.strid);
-      }
     });
 
 
@@ -1140,48 +1082,48 @@ if(true) (async ()=>
     // var count2b = [...Claim.makeOverallClaimIterator()].length;
 
     // console.log(count1,count2,count1b,count2b);
-
-    return;
-
-    var _watching = $$('watching');
-    var _watchingPerson = $$('watching.person');
-    var _watchingVideo = $$('watching.video');
-    var _watchingDate = $$('watching.date');
-
-    (await ServerContext.fetchFromKaielvin_watchYoutubeVideos())
-      .forEach(({video,date})=>
-    {
-      makeUnique([
-        [_instanceOf,_watching],
-        [_watchingPerson,_kaielvin],
-        [_watchingVideo,video],
-        [_watchingDate,{n:date.valueOf()}],
-      ]);
-
-      if(makeUnique.justCreated) console.log("start.js importWatchings added:",date.toGMTString(),video.$('prettyString'));
-      // if(makeUnique.justCreated) console.log("start.js importWatchings created:",JSON.stringify([
-      //   ['instanceOf','watching'],
-      //   ['person','kaielvin'],
-      //   ['video',video.strid],
-      //   ['date',date.valueOf()],
-      // ]));
-
-      // makeUnique([
-      //   [_instanceOf,'watching'],
-      //   ['watching.person','kaielvin'],
-      //   ['watching.video',video],
-      //   ['watching.date',date.valueOf()],
-      // ]);
-      // $$()
-      //   .$(_instanceOf,'watching')
-      //   .$('person','kaielvin')
-      //   .$('video',video)
-      //   .$('date',date.valueOf());
-    });
-    
+  
 })();
 
 
+async function importWatchings()
+{
+  var _watching = $$('watching');
+  var _watchingPerson = $$('watching.person');
+  var _watchingVideo = $$('watching.video');
+  var _watchingDate = $$('watching.date');
+
+  (await ServerContext.fetchFromKaielvin_watchYoutubeVideos())
+    .forEach(({video,date})=>
+  {
+    makeUnique([
+      [_instanceOf,_watching],
+      [_watchingPerson,_kaielvin],
+      [_watchingVideo,video],
+      [_watchingDate,{n:date.valueOf()}],
+    ]);
+
+    if(makeUnique.justCreated) console.log("start.js importWatchings added:",date.toGMTString(),video.$('prettyString'));
+    // if(makeUnique.justCreated) console.log("start.js importWatchings created:",JSON.stringify([
+    //   ['instanceOf','watching'],
+    //   ['person','kaielvin'],
+    //   ['video',video.strid],
+    //   ['date',date.valueOf()],
+    // ]));
+
+    // makeUnique([
+    //   [_instanceOf,'watching'],
+    //   ['watching.person','kaielvin'],
+    //   ['watching.video',video],
+    //   ['watching.date',date.valueOf()],
+    // ]);
+    // $$()
+    //   .$(_instanceOf,'watching')
+    //   .$('person','kaielvin')
+    //   .$('video',video)
+    //   .$('date',date.valueOf());
+  });
+}
 
 async function importFromDBPedia()
 {
