@@ -407,13 +407,14 @@ async function persistClaim(claim,remove=false)
 // Claim.onNewClaim = persistClaim;
 var _skipPersistLocal = false;
 var _skipPersistServer = false;
-Claim.onNewClaim = (claim,remove=false)=>
+Claim.onNewClaim = (claim,remove=false,source)=>
 {
   // if(!_skipPersistLocal && !remove) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
   if(!_skipPersistLocal) persistClaim(claim,remove);
   if(remove) return;
   // if(!_skipPersistServer) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"sendClaimToServer()");
-  if(!_skipPersistServer) sendClaimToServer(claim);
+  // if(!_skipPersistServer) sendClaimToServer(claim);
+  if(source != "websocket") sendClaimToServer(claim);
 };
 
 async function loadClaimsForDB()
@@ -451,12 +452,14 @@ async function importData(jsonPath)
 var loggedUser;
 var socket;
 var _wsRequestPromises = {};
+var webSocketHandler;
 var connectToWebsocket = ()=>
 {
   socket = new WebSocket('ws://localhost:8080');
   // Connection opened
   socket.addEventListener('open', function (event)
   {
+    webSocketHandler = new WebSocketHandler(socket);
   });
   socket.addEventListener('close', async function (event)
   {
@@ -467,9 +470,10 @@ var connectToWebsocket = ()=>
 
   socket.addEventListener('message', function (event)
   {
+    webSocketHandler.onMessage(event.data);
     // console.log('Message from server ', event.data);
-    var json = JSON.parse(event.data);
-    _wsRequestPromises[json.requestId].resolve(json);
+    // var json = JSON.parse(event.data);
+    // _wsRequestPromises[json.requestId].resolve(json);
   });
 }
 connectToWebsocket();
@@ -487,18 +491,33 @@ async function wsFetch(request)
     }
     else _sendClaimsToServerNow();
   }
-
-  request.requestId = randHex();
-  var promise = resolvablePromise();
-  _wsRequestPromises[request.requestId] = promise;
-  socket.send(JSON.stringify(request));
-  var response = await promise;
-  _skipPersistServer = true;
-  if(response.claims) importClaims(response.claims);
-  _skipPersistServer = false;
-  delete _wsRequestPromises[request.requestId];
-  return response;
+  return await webSocketHandler.fetchRequest(request);
 }
+
+// async function wsFetch(request)
+// {
+//   if(_claimsToServerStore)
+//   {
+//     _sendClaimsToServerDebounced.cancel();
+//     if(!request.claims)
+//     {
+//       var claimsRequest = _sendClaimsToServerNow(true);
+//       request.claims = claimsRequest.claims;
+//     }
+//     else _sendClaimsToServerNow();
+//   }
+
+//   request.requestId = randHex();
+//   var promise = resolvablePromise();
+//   _wsRequestPromises[request.requestId] = promise;
+//   socket.send(JSON.stringify(request));
+//   var response = await promise;
+//   _skipPersistServer = true;
+//   if(response.claims) importClaims(response.claims);
+//   _skipPersistServer = false;
+//   delete _wsRequestPromises[request.requestId];
+//   return response;
+// }
 
 
 

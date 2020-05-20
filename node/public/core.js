@@ -11,6 +11,35 @@ var SortedSet = require && require("collections/sorted-set");
 
 
 
+
+var Promises = {};
+Promises.wait = ms => new Promise((r, j)=>setTimeout(r, ms))
+Promises.resolvablePromise = () =>
+{
+  var resolve,reject;
+  var associate = (r, j)=>{resolve = r;reject = j}
+  var promise = new Promise(associate);
+  promise.pending = true;
+  promise.resolved = false;
+  promise.rejected = false;
+  promise.resolve = (r)=>
+  {
+    promise.pending = false;
+    promise.resolved = true;
+    resolve(r);
+  };
+  promise.reject = (e)=>
+  {
+    promise.pending = false;
+    promise.rejected = true;
+    reject(e);
+  };
+  return promise;
+}
+
+
+
+
 // used by JS methods in the graph to access server specific values and functions
 var ServerContext = {};
 
@@ -228,6 +257,7 @@ class ClaimStore
 
   addAllNodeClaims(node,includeFroms=false)
   {
+    if(this.showAddedNodes) console.log("ClaimStore.addAllNodeClaims()",node.id,node.strid,node.$('prettyString'));
     for(var typeId in node.typeTos)
       node.typeTos[typeId].forEach(this.addClaim);
     if(includeFroms)
@@ -461,7 +491,7 @@ if(SortedSet)
 // Claim.deletedIdIndex = {};
 // Claim.idIndex = {};
 Claim.count = 0;
-Claim.make = function(from_,type,to,claimer,date)
+Claim.make = function(from_,type,to,claimer,date,source)
 {
   var claim = new Claim(from_,type,to,claimer,date);
   // var fromStore = Claim.mainClaimStore.getFromId(id);
@@ -477,7 +507,7 @@ Claim.make = function(from_,type,to,claimer,date)
   // var id = claim.id;
   // Claim.mainClaimStore._addClaim(claim,id);
   // if(Claim.fromTypeToSet) Claim.fromTypeToSet.push(claim);
-  if(Claim.onNewClaim) Claim.onNewClaim(claim);
+  if(Claim.onNewClaim) Claim.onNewClaim(claim,false,source);
   return claim;
 
   // var id = claim.id;
@@ -487,7 +517,7 @@ Claim.make = function(from_,type,to,claimer,date)
   // if(Claim.onNewClaim) Claim.onNewClaim(claim);
   // return Claim.idIndex[id] = claim;
 }
-Claim.remove = function(claim) // by value
+Claim.remove = function(claim,source) // by value
 {
   // console.log("Claim.remove()",claim.id,claim.idStr);
   if(!Claim.hideDeleteLogs) console.log("Claim.remove()",claim.id,claim.idStr);
@@ -500,10 +530,10 @@ Claim.remove = function(claim) // by value
   if(                   from_.isEmpty()) delete _idToNodeIndex[from_.id];
   if(to instanceof Node && to.isEmpty()) delete _idToNodeIndex[to   .id];
   // console.log("Claim.remove() Claim.count--",Claim.count);
-  if(Claim.onNewClaim) Claim.onNewClaim(removed,true);
+  if(Claim.onNewClaim) Claim.onNewClaim(removed,true,source);
   return true;
 }
-Claim.fromCompactJson = function(json)
+Claim.fromCompactJson = function(json,source)
 {
   var from_ = Node.makeById(json.f);
   var type  = Node.makeById(json.T);
@@ -516,10 +546,10 @@ Claim.fromCompactJson = function(json)
   if(json.del)
   {
     var claim = new Claim(from_,type,to,claimer,date);
-    return Claim.remove(claim);
+    return Claim.remove(claim,source);
   }
 
-  var claim = Claim.make(from_,type,to,claimer,date);
+  var claim = Claim.make(from_,type,to,claimer,date,source);
   return claim;
 }
 
@@ -1349,7 +1379,7 @@ function makeUnique(typeTos)
 
 
 
-function importClaims(compactJson)
+function importClaims(compactJson,source)
 {
   var claims = [];
   if(compactJson.v != 1)
@@ -1378,7 +1408,7 @@ function importClaims(compactJson)
     claimJson.d = (claimJson.d || 0) + lastClaimJsons.d;
     lastClaimJsons.d = claimJson.d;
     // console.log("importClaims()","claimJson",claimJson);
-    var claim = Claim.fromCompactJson(claimJson);
+    var claim = Claim.fromCompactJson(claimJson,source);
     claims.push(claim);
   }
   return claims;
@@ -1541,9 +1571,180 @@ function garbageCollect(keepCoreOnly=false)
 }
 
 
-module.exports = {ServerContext,fulltextSearch,resetFulltextSearchObject,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class WebSocketHandler
+{
+  constructor(connection)
+  {
+    this.connection = connection;
+    this.requestPromises = {};
+    this.onMessage = this.onMessage.bind(this);
+    this.fetchRequest = this.fetchRequest.bind(this);
+  }
+  async fetchRequest(request)
+  {
+    request.requestId = randHex();
+    var promise = Promises.resolvablePromise();
+    this.requestPromises[request.requestId] = promise;
+    this.connection.send(JSON.stringify(request));
+    var response = await promise;
+    // if(response.claims) importClaims(response.claims);
+    delete this.requestPromises[request.requestId];
+    return response;
+  }
+
+
+
+  async fetchNodesFully(nodes)
+  {
+    await this.fetchRequest({request:"fetchNodesById",nodeIds:nodes.map(n=>n.id)});
+    await this._fectchComplementaryNodes(nodes);
+  }
+  async fetchNodesFullyFromIds(nodeIds)
+  {
+    await this.fetchRequest({request:"fetchNodesById",nodeIds});
+    var nodes = nodeIds.map(id=> Node.getById(id) );
+    await this._fectchComplementaryNodes(nodes);
+  }
+  async _fectchComplementaryNodes(nodes)
+  {
+    var unknownNodes = [];
+    nodes.forEach(node=>
+    {
+      var types = node.getFrom_types();
+      types.forEach(type=>
+      {
+        if(!type.$(_instanceOf)) unknownNodes.push(type);
+        node.typeTos[type.id].forEach(claim=>
+        {
+          var to = claim.to;
+          if(to instanceof Node && !to.$(_instanceOf)) unknownNodes.push(to);
+        });
+      });
+    });
+    if(unknownNodes.length > 0) console.log("WebSocketHandler._fectchComplementaryNodes() …",'count',nodes.length,'unknownCount',unknownNodes.length);
+    if(unknownNodes.length > 0) await this.fetchNodesFully(unknownNodes);
+  }
+
+
+
+  async onMessage(message)
+  {
+    var message = JSON.parse(message);
+    if(message.claims) importClaims(message.claims,"websocket"); // always, request or response
+    
+    // is a response
+    var responsePromise = this.requestPromises[message.requestId];
+    if(responsePromise) return responsePromise.resolve(message);
+    // else, is a request...
+
+    console.log('WebSocketHandler',"onMessage()","message.requestId",message.requestId,"message.request",message.request);
+    var response = {requestId:message.requestId,data:[]};
+    var responseClaimsStore = new ClaimStore();
+    // responseClaimsStore.showAddedNodes = true;
+
+    if(message.request == 'fetchCollection')
+    {
+      var {collection,skip,limit,localIds} = message;
+      var collectionNode = $$(collection);
+      if(!collectionNode)
+      {
+        console.log("WebSocketHandler.fetchCollection",'unknown collection, asking the client for it...');
+        await this.fetchNodesFullyFromIds([collection]);
+        collectionNode = $$(collection);
+      }
+      if(skip.from) skip.from = Node.makeById(skip.from);
+      var {objects,totalCount} = collectionNode.$ex('resolve',skip,limit,true,localIds);
+
+      var excludeIdsSet = localIds ? _.keyBy(localIds) : {};
+      objects.forEach(result=>
+      {
+        if(!excludeIdsSet[result.id]) responseClaimsStore.addAllNodeClaims(result,false);
+      });
+      response.results = objects.map(result=>result.id);
+      response.totalCount = totalCount;
+
+      console.log("WebSocketHandler.fetchCollection",skip.from ? skip.from.id : skip,limit,localIds.length,response.results.length,response.totalCount);
+    }
+    if(message.request == 'fetchNodesById')
+    {
+      var {nodeIds} = message;
+      nodeIds.forEach(nodeId=>
+        responseClaimsStore.addAllNodeClaims(Node.makeById(nodeId),false));
+    }
+    if(message.request == 'deleteNodesById')
+    {
+      var {nodeIds} = message;
+      nodeIds.forEach(nodeId=>
+        Node.makeById(nodeId).delete());
+    }
+    // if(message.request == 'fetchYoutubeChannel')
+    // {
+    //   var {channelId} = message;
+    //   var channel = Node.makeById(channelId);
+    //   console.log("WS fetchYoutubeChannel()","channel",channel.id,channel.$('prettyString'));
+    //   var videos = await channel.$ex('fetch');
+    //   videos.forEach(video=>
+    //     responseClaimsStore.addAllNodeClaims(videos,false));
+    //   response.videos = videos.map(v=>v.id);
+    // }
+
+  // {descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]}
+    // if(message.request == "makeYouTubeVideo")
+    // {
+    //   var video = await $$('YoutubeVideo','instanciable.make')(message.vid);
+    //   response.data.push(nodeToJson(video,true));
+    //   response.videoId = video.id;
+    // }
+
+    if(responseClaimsStore.length > 0)
+      response.claims = responseClaimsStore.toCompactJson();
+
+    this.connection.send(JSON.stringify(response));
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+module.exports = {Promises,ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,_classes,_supClasses,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,
   garbageCollect,
-_stridClaims,};
+_stridClaims,
+WebSocketHandler,};

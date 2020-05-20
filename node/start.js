@@ -21,7 +21,8 @@ var {ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,_classes,_supClasses,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,
-  garbageCollect,_stridClaims} = require('./public/core.js');
+  garbageCollect,_stridClaims,
+WebSocketHandler,} = require('./public/core.js');
 
 const fetch = require("node-fetch");
 var fs = require('fs');
@@ -462,83 +463,86 @@ console.log("http://localhost:3000/all");
 
 
 
+
+
+
+
 const WebSocket = require('ws');
  
 const wss = new WebSocket.Server({ port: 8080 });
  
 wss.on('connection', function connection(ws)
 {
+  var handler = new WebSocketHandler(ws);
   console.log("on WS client connection openned.");
   ws.on('close', async function incoming(message)
   {
     console.log("on WS client connection closed.");
   });
-  ws.on('message', async function incoming(message)
-  {
-    var message = JSON.parse(message);
-    console.log("on client message",message.request);
-    var response = {requestId:message.requestId,data:[]};
-    var responseClaimsStore = new ClaimStore();
-    if(message.claims) importClaims(message.claims);
+  ws.on('message',handler.onMessage);
+//   ws.on('message', async function incoming(message)
+//   {
+//     var message = JSON.parse(message);
+//     console.log("on client message",message.request);
+//     var response = {requestId:message.requestId,data:[]};
+//     var responseClaimsStore = new ClaimStore();
+//     if(message.claims) importClaims(message.claims);
 
-    if(message.request == 'fetchCollection')
-    {
-      var {collection,skip,limit,localIds} = message;
-      collection = $$(collection);
-      if(skip.from) skip.from = Node.makeById(skip.from);
-      var {objects,totalCount} = collection.$ex('resolve',skip,limit,true,localIds);
+//     if(message.request == 'fetchCollection')
+//     {
+//       var {collection,skip,limit,localIds} = message;
+//       collection = $$(collection);
+//       if(skip.from) skip.from = Node.makeById(skip.from);
+//       var {objects,totalCount} = collection.$ex('resolve',skip,limit,true,localIds);
 
-      var excludeIdsSet = localIds ? _.keyBy(localIds) : {};
-      objects.forEach(result=>
-      {
-        if(!excludeIdsSet[result.id]) responseClaimsStore.addAllNodeClaims(result,false);
-      });
-      response.results = objects.map(result=>result.id);
-      response.totalCount = totalCount;
+//       var excludeIdsSet = localIds ? _.keyBy(localIds) : {};
+//       objects.forEach(result=>
+//       {
+//         if(!excludeIdsSet[result.id]) responseClaimsStore.addAllNodeClaims(result,false);
+//       });
+//       response.results = objects.map(result=>result.id);
+//       response.totalCount = totalCount;
 
-      console.log("wss.fetchCollection",skip.from ? skip.from.id : skip,limit,localIds.length,response.results.length,response.totalCount);
-    }
-    if(message.request == 'fetchNodesById')
-    {
-      var {nodeIds} = message;
-      nodeIds.forEach(nodeId=>
-        responseClaimsStore.addAllNodeClaims(Node.makeById(nodeId),false));
-    }
-    if(message.request == 'deleteNodesById')
-    {
-      var {nodeIds} = message;
-      nodeIds.forEach(nodeId=>
-        Node.makeById(nodeId).delete());
-    }
-    if(message.request == 'fetchYoutubeChannel')
-    {
-      var {channelId} = message;
-      var channel = Node.makeById(channelId);
-      console.log("WS fetchYoutubeChannel()","channel",channel.id,channel.$('prettyString'));
-      var videos = await channel.$ex('fetch');
-      videos.forEach(video=>
-        responseClaimsStore.addAllNodeClaims(videos,false));
-      response.videos = videos.map(v=>v.id);
-    }
+//       console.log("wss.fetchCollection",skip.from ? skip.from.id : skip,limit,localIds.length,response.results.length,response.totalCount);
+//     }
+//     if(message.request == 'fetchNodesById')
+//     {
+//       var {nodeIds} = message;
+//       nodeIds.forEach(nodeId=>
+//         responseClaimsStore.addAllNodeClaims(Node.makeById(nodeId),false));
+//     }
+//     if(message.request == 'deleteNodesById')
+//     {
+//       var {nodeIds} = message;
+//       nodeIds.forEach(nodeId=>
+//         Node.makeById(nodeId).delete());
+//     }
+//     if(message.request == 'fetchYoutubeChannel')
+//     {
+//       var {channelId} = message;
+//       var channel = Node.makeById(channelId);
+//       console.log("WS fetchYoutubeChannel()","channel",channel.id,channel.$('prettyString'));
+//       var videos = await channel.$ex('fetch');
+//       videos.forEach(video=>
+//         responseClaimsStore.addAllNodeClaims(videos,false));
+//       response.videos = videos.map(v=>v.id);
+//     }
 
-// {descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]}
-    // if(message.request == "makeYouTubeVideo")
-    // {
-    //   var video = await $$('YoutubeVideo','instanciable.make')(message.vid);
-    //   response.data.push(nodeToJson(video,true));
-    //   response.videoId = video.id;
-    // }
+// // {descriptor:[["instanceOf","YoutubeVideo"],["strid",vid]]}
+//     // if(message.request == "makeYouTubeVideo")
+//     // {
+//     //   var video = await $$('YoutubeVideo','instanciable.make')(message.vid);
+//     //   response.data.push(nodeToJson(video,true));
+//     //   response.videoId = video.id;
+//     // }
 
-    if(responseClaimsStore.length > 0)
-      response.claims = responseClaimsStore.toCompactJson();
+//     if(responseClaimsStore.length > 0)
+//       response.claims = responseClaimsStore.toCompactJson();
 
-    ws.send(JSON.stringify(response));
-  });
+//     ws.send(JSON.stringify(response));
+//   });
 
 });
-
-
-
 
 
 
