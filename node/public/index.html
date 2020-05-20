@@ -1623,7 +1623,8 @@ var showObjectFromHash = ()=>showObject(location.hash && location.hash.substring
   loggedUser = $$('person').$froms('instanceOf').find(u=>u.$('title') == 'Kai Elvin');
   console.log("loggedUser",loggedUser&&loggedUser.$('title'));
 
-  var _garbageCollect = ()=>garbageCollect([$$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching')]);
+  // var _garbageCollect = ()=>garbageCollect([$$('YoutubeVideo'),$$('YoutubeChannel'),$$('watching')]);
+  var _garbageCollect = ()=>garbageCollect(true);
   // setInterval(_garbageCollect, 10000);
   _garbageCollect();
 

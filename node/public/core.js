@@ -970,6 +970,7 @@ function stridToNode(strid)
 var _strid          = Node.makeById('13d4c779');
 var _multipleValues = Node.makeById('d605bb65');
 var _true           = Node.makeById('8d377661');
+var _false          = Node.makeById('b938cada');
 var _object         = Node.makeById('8dd2a277');
 var _class          = Node.makeById('7ee96d65');
 var _abstractClass  = Node.makeById('e3246c5f');
@@ -1385,8 +1386,44 @@ function importClaims(compactJson)
 
 
 
-function garbageCollect(extraGarbageCollectables=[])
+Node.coreNodesIterator = function * ()
 {
+  var excludedClasses = [ // from coreNodes
+    $$('person'),
+    $$('resolvable'),
+    $$('collection'),
+    $$('descriptorTo'),$$('descriptorFrom'), // legacy
+  ];
+  var coreNodes = $$('coreNodes').$froms('object.tags');
+  var coreNodesMap = {};
+  for(var coreNode of coreNodes) coreNodesMap[coreNode.id] = true;
+
+  for(var coreNode of coreNodes)
+  {
+    yield coreNode;
+    var classes = coreNode.$(_classes);
+    // console.log("GET /all","adding",coreNode.$('prettyString'),classes.map(c=>c.name).join());
+    if(classes.includes(_instanciable))
+    {
+      var supClasses = coreNode.$(_supClasses);
+      // console.log("GET /all","supClasses:",supClasses.map(c=>c.name).join());
+      if(!excludedClasses.some(excludedClass=> supClasses.includes(excludedClass) ))
+        for(var node of coreNode.$froms(_instanceOf))
+        {
+          if(coreNodesMap[node.id]) continue; // skipping a duplicate
+          yield node;
+          // console.log("GET /all","adding",node.$('prettyString'));
+        }
+    }
+  }
+}
+
+
+// function garbageCollect(extraGarbageCollectables=[])
+function garbageCollect(keepCoreOnly=false)
+{
+  var startTime = Date.now();
+    console.log("garbageCollect() …");
   // var garbageCollectables = [
   //   $$('descriptorIntersection'),$$('descriptorTo'),$$('descriptorFrom'),$$('descriptorDifference'),
   //   $$('collection'),$$('descriptorFullTextSearch'),
@@ -1405,12 +1442,17 @@ function garbageCollect(extraGarbageCollectables=[])
   }
   var saveClaimMap = {};
   var saveNodeMap = {};
-  var saveNode = (node,instanciable)=>
+  var saveNode = (node,instanciable,classes)=>
   {
     if(!node) return;
     if(saveNodeMap[node.id]) return; // saved already
     saveNodeMap[node.id] = node;
-    var classes = instanciable ? instanciable.$(_supClasses) : node.$(_classes);
+    // classes = classes
+    //   ? classes
+    //   : instanciable
+    //   ? instanciable.$(_supClasses)
+    //   : node.$(_classes);
+    classes = classes || instanciable && instanciable.$(_supClasses) || node.$(_classes);
     // if(classes.length <= 1) console.error ("Node with only one class",node.id,node.name,classes.map(c=>c.name).join());
 
     for(var class_ of classes)
@@ -1459,12 +1501,28 @@ function garbageCollect(extraGarbageCollectables=[])
   //   //    console.log("    … ",claimType.$('prettyString'));
   // }
 
-  _.values(_idToNodeIndex).forEach(node=>
-  {
-    if(node.$('isGarbageCollectable') != _true) saveNode(node);
-  })
+  // _.values(_idToNodeIndex).forEach((node,i)=>
+  // {
+  //   // if(i%2000 == 0) console.log(node.$('prettyString'),valueToString(node.$('isGarbageCollectable')));
+  //   // if(node.$(_instanceOf) == $$('descriptorTo')) console.log(node.$('prettyString'),valueToString(node.$('isGarbageCollectable')),node.$(_classes).map(c=>c.$('garbageCollectable').name).join());
+  //   if(node.$('isGarbageCollectable') != _true) saveNode(node);
+  // })
 
-  var garbageCollected = _.values(_idToNodeIndex).filter(node=>!saveNodeMap[node.id]);
+  if(keepCoreOnly)
+    for(var node of Node.coreNodesIterator()) saveNode(node);
+  else
+  {
+    var instanciables = $$('instanciable').$froms('object.instanceOf');
+    instanciables.forEach(instanciable=>
+    {
+      var supClasses = instanciable.$ex(_supClasses);
+      if(supClasses.some(c=> c.$('garbageCollectable') == _true )) return; // not trying to save instances of this instanciable
+      instanciable.$froms('object.instanceOf').forEach(node=>saveNode(node,instanciable,supClasses));
+    });
+  }
+
+
+  // var garbageCollected = _.values(_idToNodeIndex).filter(node=>!saveNodeMap[node.id]);
   // for(var node of garbageCollected)
   //   if(!garbageCollectables.includes(node.$(_instanceOf))) console.log("garbageCollect() Garbage collecting:",node.id,node.$('prettyString'));
   // for(var node of garbageCollected)
@@ -1479,7 +1537,7 @@ function garbageCollect(extraGarbageCollectables=[])
   delete Claim.hideDeleteLogs;
 
   // garbageCollected.forEach(node=>node.delete());
-    console.log("garbageCollect() claims # after:",Claim.count);
+    console.log("garbageCollect() claims # after:",Claim.count,"Took",Date.now()-startTime);
 }
 
 

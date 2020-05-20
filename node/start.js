@@ -329,33 +329,36 @@ app.use(express.static('public'))
 app.get('/all', (req, res) =>
 {
   var claimStore = new ClaimStore();
+  for(var node of Node.coreNodesIterator())
+    claimStore.addAllNodeClaims(node);
 
-  // keep in sync with object.neededAsCore(), this implementation is faster
 
-  var excludedClasses = [ // from coreNodes
-    $$('person'),
-    $$('resolvable'),
-    $$('collection'),
-    $$('descriptorTo'),$$('descriptorFrom'), // legacy
-  ];
+  // // keep in sync with object.neededAsCore(), this implementation is faster
 
-  $$('coreNodes').$froms('object.tags').forEach(coreNode=>
-  {
-    claimStore.addAllNodeClaims(coreNode);
-    var classes = coreNode.$(_classes);
-    console.log("GET /all","adding",coreNode.$('prettyString'),classes.map(c=>c.name).join());
-    if(classes.includes(_instanciable))
-    {
-      var supClasses = coreNode.$(_supClasses);
-      console.log("GET /all","supClasses:",supClasses.map(c=>c.name).join());
-      if(!excludedClasses.some(excludedClass=> supClasses.includes(excludedClass) ))
-        coreNode.$froms(_instanceOf).forEach(node=>
-        {
-          claimStore.addAllNodeClaims(node);
-          console.log("GET /all","adding",node.$('prettyString'));
-        });
-    }
-  })
+  // var excludedClasses = [ // from coreNodes
+  //   $$('person'),
+  //   $$('resolvable'),
+  //   $$('collection'),
+  //   $$('descriptorTo'),$$('descriptorFrom'), // legacy
+  // ];
+
+  // $$('coreNodes').$froms('object.tags').forEach(coreNode=>
+  // {
+  //   claimStore.addAllNodeClaims(coreNode);
+  //   var classes = coreNode.$(_classes);
+  //   console.log("GET /all","adding",coreNode.$('prettyString'),classes.map(c=>c.name).join());
+  //   if(classes.includes(_instanciable))
+  //   {
+  //     var supClasses = coreNode.$(_supClasses);
+  //     console.log("GET /all","supClasses:",supClasses.map(c=>c.name).join());
+  //     if(!excludedClasses.some(excludedClass=> supClasses.includes(excludedClass) ))
+  //       coreNode.$froms(_instanceOf).forEach(node=>
+  //       {
+  //         claimStore.addAllNodeClaims(node);
+  //         console.log("GET /all","adding",node.$('prettyString'));
+  //       });
+  //   }
+  // })
 
 
   // var excludedInstanciable = [
