@@ -337,16 +337,17 @@ class ClaimStore
 
 
 
-
+const Claim_ResolvableMask = 1;
 class Claim
 {
-  constructor(from_,type,to,claimer,date)
+  constructor(from_,type,to,claimer,date,flags)
   {
     if(!to) throw new Error("to undefined",from_.name,type.name);
     this.from = from_;
     this.type = type;
     this.to = to;
     this.claimer = claimer;
+    if(flags) this.flags = flags; // always undefined if 0
     // this.date = new Date(date);
     if(date && !(date instanceof Date)) date = new Date(date);
     this.date = date || new Date();
@@ -366,6 +367,7 @@ class Claim
       if(!_.isEqual(c2.to,this.to)) return false;
     }
     if(c2.date.valueOf() != this.date.valueOf()) return false;
+    if(c2.flags != this.flags) return false;
     if(c2.claimer != this.claimer) return false;
     return true;
   }
@@ -424,6 +426,10 @@ class Claim
       }
     }
     // to values are presumably equal by now
+
+    var F1 = this.flags;
+    var F2 = c2.flags;
+    if(F1 != F2) return (F1||0)>(F2||0) ? +1 : -1;
 
     var c1 = this.claimer;
     var c2 = c2.claimer;
@@ -830,8 +836,55 @@ class Node
     return jsMethod.j(this,...args);
   }
 
+
+
+  // cached accessor for speed
+  get instanciable()
+  {
+    if(this._cache_instanciable) return this._cache_instanciable;
+    return this._cache_instanciable = $$(this,_instanceOf);
+  }
+  // cached accessor for speed
+  get supClasses()
+  {
+    if(this._cache_supClasses) return this._cache_supClasses;
+    return this._cache_supClasses = $$(this,_supClasses);
+  }
+  // cached accessor for speed
+  get classes()
+  {
+    var instanciable = this.instanciable;
+    if(!instanciable) return [_object];
+    return instanciable.supClasses;
+  }
+  hasClass(class_)
+  {
+    return this.classes.includes(class_);
+  }
+  hasAnyClass(...anyClasses)
+  {
+    var classes = this.classes;
+    return anyClasses.some(class_=>classes.includes(class_));
+  }
+  clearClassesCache()
+  {
+    delete this._cache_instanciable;
+    delete this._cache_supClasses;
+  }
+
+
   $(i2,i3,i4)
   {
+    // if(i2 == _instanceOf && i3 === undefined)
+    // {
+    //   console.error(new Error("call of .$(_instanceOf), use .instanciable instead for performance"));
+    //   return this.instanciable;
+    // }
+    // if(i2 == _classes && i3 === undefined)
+    // {
+    //   console.error(new Error("call of .$(_classes), use .classes instead for performance"));
+    //   return this.classes;
+    // }
     return $$(this,i2,i3,i4);
   }
 
@@ -846,14 +899,26 @@ class Node
   {
     method = strToType(method,this);
     var _function = method.getFromType_to(_fieldFunction);
+        // console.log("Node.$ex()",
+        //   'method',method.name,'_function',_function&&_function.$('prettyString'));
     if(_function)
     {
       var expression = _function.$(_functionExpr);
+      console.log("Node.$ex()",
+        'expression',expression&&expression.$('prettyString'));
       if(expression)
       {
         var context = {};
         var variable = _function.$(_functionVar);
         if(variable) context[variable.id] = [this];
+        console.log("Node.$ex()",
+          'expression',expression.$('prettyString'),
+          'variable',variable.$('prettyString'),
+          'value(=this)',this.$('prettyString'));
+        // var results = expression.$ex('resolve',context);
+        // console.log("Node.$ex()",
+        //   'results',results);
+        // return results;
         return expression.$ex('resolve',context);
       }
     }
@@ -1014,6 +1079,7 @@ var _claimType      = Node.makeById('50fd3931');
 var _fieldFunction  = Node.makeById('dafc06f4');
 var _functionVar    = Node.makeById('a7af3fc9');
 var _functionExpr   = Node.makeById('31552381');
+var _variable       = Node.makeById('ddef9c88');
 var _typeFrom       = Node.makeById('59f08f21');
 var _typeTo         = Node.makeById('6d252ccf');
 var _jsMethod       = Node.makeById('291f3841');
@@ -1024,6 +1090,9 @@ var _resolve        = Node.makeById('d26ffe55');
 var _kaielvin       = Node.makeById('d086fe37');
 var _claimDisabled  = Node.makeById('4f494962');
 var _claimDeprecated= Node.makeById('6f450862');
+var _resolvable     = Node.makeById('ade3fceb');
+var _collection     = Node.makeById('71c1e2d8');
+var _tag            = Node.makeById('ba50a0e2');
 
 Node.defaultUser = _kaielvin;
 
@@ -1067,7 +1136,7 @@ function strToType(str,node=undefined,classes=undefined)
   }
   if(node||classes)
   {
-    classes = classes || node.$ex(_classes);
+    classes = classes || node.classes;
     if(classes instanceof Node)
     {
       console.error(new Error("strToType() deprecated use of strToType with instanciable (provide classes or nothing), provided: "+classes.name));
@@ -1431,7 +1500,7 @@ Node.coreNodesIterator = function * ()
   for(var coreNode of coreNodes)
   {
     yield coreNode;
-    var classes = coreNode.$(_classes);
+    var classes = coreNode.classes;
     // console.log("GET /all","adding",coreNode.$('prettyString'),classes.map(c=>c.name).join());
     if(classes.includes(_instanciable))
     {
@@ -1482,7 +1551,7 @@ function garbageCollect(keepCoreOnly=false)
     //   : instanciable
     //   ? instanciable.$(_supClasses)
     //   : node.$(_classes);
-    classes = classes || instanciable && instanciable.$(_supClasses) || node.$(_classes);
+    classes = classes || instanciable && instanciable.$(_supClasses) || node.classes;
     // if(classes.length <= 1) console.error ("Node with only one class",node.id,node.name,classes.map(c=>c.name).join());
 
     for(var class_ of classes)
@@ -1594,7 +1663,6 @@ function garbageCollect(keepCoreOnly=false)
 
 
 
-
 class WebSocketHandler
 {
   constructor(connection)
@@ -1678,6 +1746,7 @@ class WebSocketHandler
       }
       if(skip.from) skip.from = Node.makeById(skip.from);
       var {objects,totalCount} = collectionNode.$ex('resolve',skip,limit,true,localIds);
+      // console.log("WebSocketHandler.fetchCollection() objects",objects);
 
       var excludeIdsSet = localIds ? _.keyBy(localIds) : {};
       objects.forEach(result=>
@@ -1688,6 +1757,7 @@ class WebSocketHandler
       response.totalCount = totalCount;
 
       console.log("WebSocketHandler.fetchCollection",skip.from ? skip.from.id : skip,limit,localIds.length,response.results.length,response.totalCount);
+      // console.log("WebSocketHandler.fetchCollection",response.results);
     }
     if(message.request == 'fetchNodesById')
     {

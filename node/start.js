@@ -17,7 +17,7 @@ instanciable subClassOf class
 var MiniSearch = MiniSearch || require('minisearch'); // already defined on the frontend version
 
 var _ = require('lodash');
-var {ServerContext,fulltextSearch,resetFulltextSearchObject,
+var {Promises,ServerContext,fulltextSearch,resetFulltextSearchObject,
   randHex,valueToString,Claim,Node,makeNode,stridToNode,$$,valueToHtml,makeUnique,_idToNodeIndex,_classes,_supClasses,
   _object,_anything,_instanceOf,_instanciable,_claimType,_typeFrom,_typeTo,_jsMethod,
   ClaimStore,importClaims,
@@ -34,38 +34,6 @@ fss.writeFile = promisify(fs.writeFile);
 fss.rename = promisify(fs.rename);
 var exec = promisify(require('child_process').exec);
 
-var Promises = {};
-Promises.wait = ms => new Promise((r, j)=>setTimeout(r, ms))
-Promises.resolvablePromise = () =>
-{
-  var resolve,reject;
-  var associate = (r, j)=>{resolve = r;reject = j}
-  var promise = new Promise(associate);
-  promise.pending = true;
-  promise.resolved = false;
-  promise.rejected = false;
-  promise.resolve = (r)=>
-  {
-    promise.pending = false;
-    promise.resolved = true;
-    resolve(r);
-  };
-  promise.reject = (e)=>
-  {
-    promise.pending = false;
-    promise.rejected = true;
-    reject(e);
-  };
-  return promise;
-}
-
-function wait(ms)
-{
-var d = new Date();
-var d2 = null;
-do { d2 = new Date(); }
-while(d2-d < ms);
-}
 
 
 class WorkerPool

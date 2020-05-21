@@ -265,6 +265,23 @@ h1 small
 }
 
 
+.tagButton
+{
+  display: inline-block;
+  border-radius: 1em;
+  padding: 0.1em 0.6em;
+  color: #555;
+  border: 1px solid #555;
+  margin-right: 0.4em;
+  cursor: pointer;
+}
+.tagButton.active
+{
+  /*background: #111;*/
+  color: #bbb;
+  border: 1px solid #bbb;
+}
+
 
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" type="text/javascript"></script>
@@ -387,7 +404,7 @@ function reportPersisted(remove=false)
   reportPersistedDebounced();
 }
 
-async function persistClaim(claim,remove=false)
+async function persistClaim(claim,remove=false,source)
 {
   if(remove)
   {
@@ -410,11 +427,13 @@ var _skipPersistServer = false;
 Claim.onNewClaim = (claim,remove=false,source)=>
 {
   // if(!_skipPersistLocal && !remove) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
-  if(!_skipPersistLocal) persistClaim(claim,remove);
+  // if(!_skipPersistLoca) persistClaim(claim,remove);
+  // console.log("Claim.onNewClaim()","source",source);
+  if(source != "localDisk") persistClaim(claim,remove,source);
   if(remove) return;
   // if(!_skipPersistServer) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"sendClaimToServer()");
   // if(!_skipPersistServer) sendClaimToServer(claim);
-  if(source != "websocket") sendClaimToServer(claim);
+  if(source != "websocket" && source != "localDisk") sendClaimToServer(claim);
 };
 
 async function loadClaimsForDB()
@@ -424,7 +443,7 @@ async function loadClaimsForDB()
   console.log("loadClaimsForDB()","_skipPersistLocal",_skipPersistLocal);
   var claimJsons = await claimsDB.getAll('claims')
   for(var claimJson of claimJsons)
-    var claim = Claim.fromCompactJson(claimJson);
+    var claim = Claim.fromCompactJson(claimJson,'localDisk');
   _skipPersistLocal = false;
   _skipPersistServer = false;
   console.log("loadClaimsForDB()","_skipPersistLocal",_skipPersistLocal);
@@ -775,6 +794,7 @@ var idToShortcut;
 var shortcutToId;
 function showLinkShortcuts()
 {
+    console.log("showLinkShortcuts()",showingLinkShortcuts);
   if(showingLinkShortcuts) return;
   // console.log("showLinkShortcuts()");
   var links = [...document.getElementsByClassName('node-link')];
@@ -792,7 +812,7 @@ function showLinkShortcuts()
       if(shortcut) shortcutToId[shortcut] = id;
       idList.push(id);
     }
-    // console.log("showLinkShortcuts()","link",link.dataset.id,Node.makeById(link.dataset.id).$('prettyString'));
+    console.log("showLinkShortcuts()","link",link.dataset.id,Node.makeById(link.dataset.id).$('prettyString'));
 
     if(shortcut) link.appendChild(htmlToElement('<span class="node-link-shortcut">'+shortcut+'</span>'));
   });
@@ -844,6 +864,7 @@ document.addEventListener('keydown', async e => {
     if (document.activeElement)
         document.activeElement.blur();
     showLinkShortcuts();
+    await Promises.wait(500);
     var id = shortcutToId['0'];
     if(id) showObject(Node.makeById(id));
     else hideLinkShortcuts();
@@ -955,12 +976,12 @@ document.addEventListener('keydown', async e => {
     return e.preventDefault();
   }
 
-  if(!c&&!s&& e.key == 'p')
-  {
-    if(selectedInstanciable == $$('claimType'))
-      goToObject(selectedNode.$('typeFrom'));
-    return e.preventDefault();
-  }
+  // if(!c&&!s&& e.key == 'p')
+  // {
+  //   if(selectedInstanciable == $$('claimType'))
+  //     goToObject(selectedNode.$('typeFrom'));
+  //   return e.preventDefault();
+  // }
 
   if(!c&&!s&& (e.key == 'a' || e.key == 'ArrowLeft'))
   {
@@ -1037,6 +1058,97 @@ document.addEventListener('keydown', async e => {
     onHeaderSearchChanged(true);
     return e.preventDefault();
   }
+// TRY SUMMARIZING THIS: https://www.youtube.com/watch?v=VzGH97DQzA4
+
+  var makeFieldBySomewardsTagResolver = (tag,node)=>
+  {
+    var classes = node.classes;
+    var inwardsField;
+    found:
+    for(var class_ of classes)
+    for(var field of class_.$froms(_typeFrom))
+    if(field.$ex('getTags').includes(tag))
+    {
+      inwardsField = field;
+      break found;
+    }
+    console.log('accessFieldBySomewardsTag()',tag.name,inwardsField&&inwardsField.name)
+    if(!inwardsField) return false;
+    return instanciate('accessorTo',['in',node],['type',inwardsField]);
+  }
+  var accessFieldBySomewardsTag = tag=>
+  {
+    var resolvable = makeFieldBySomewardsTagResolver(tag,selectedNode);
+    // if(!classes.some(c=>c.$('garbageCollectable')))
+    {
+      var solutions = resolvable.$ex('resolve');
+      if(solutions.length == 1)
+        return goToObject(solutions[0]);
+    }
+    goToObject(resolvable.$('collection'));
+  }
+
+  if(!c&&!s&& e.key == ',')
+  {
+    accessFieldBySomewardsTag($$('inwardsFields'));
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'è')
+  {
+    accessFieldBySomewardsTag($$('altInwardsFields'));
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'p')
+  {
+    accessFieldBySomewardsTag($$('upwardsFields'));
+    return e.preventDefault();
+  }
+  if(!c&&!s&& e.key == 'y')
+  {
+    accessFieldBySomewardsTag($$('downwardsFields'));
+    return e.preventDefault();
+  }
+
+  if( c&&!s&& e.key == 'b')
+  {
+    var _inwardsFields = $$('inwardsFields');
+    var nodeToReplaceByVariable;
+    var nodeIt = selectedNode;
+    while(true)
+    {
+      if(!nodeIt.hasAnyClass(_resolvable,_collection)) break;
+
+      var inwardsResolvable = makeFieldBySomewardsTagResolver(_inwardsFields,nodeIt);
+      var results = inwardsResolvable.$ex('resolve');
+      if(results.length == 0) break;
+
+      nodeIt = results[0];
+    }
+
+    if(nodeIt == selectedNode)
+    {
+      console.error('build function:',"selected node is not a resolvable/collection")
+    }
+    else
+    {
+      console.log("build function:",'would substitute',nodeIt.$('prettyString'));
+      // var variable = Node.make().$(_instanceOf,_variable);
+      // clone the selected expression replacing nodeIt into variable
+      // var newExpr = selectedNode.$ex('cloneTreeReplacingBy',
+      //   n=>n==nodeIt?variable:n,
+      //   (field,to,from)=>
+      //          from.hasAnyClass(_resolvable,_collection)
+      //       && field.$ex('getTags').includes(_inwardsFields)
+      //       && field.$('_typeTo') == _resolvable
+      // );
+      // var function_ = instanciate('function',['in',newExpr],['variable',variable]);
+      // goToObject( function_ );
+    }
+
+
+    return e.preventDefault();
+  }
+
 
   if(!c&&!s&& e.key == 'z')
   {
@@ -1193,41 +1305,41 @@ document.addEventListener("click", async e=>
     return;
   }
 
-  if(selectedMethod != 'simpleView'
-    || searchResultsContainer.style.visibility == "visible")
-  {
-    var instanciable = node.$('instanceOf');
-    if(instanciable && instanciable == $$('tag'))
-    {
-      var descriptor = makeUnique([
-          ['object.instanceOf','descriptorFrom'],
-          ['descriptorFrom.to',node],
-          ['descriptorFrom.type','object.tags'],
-        ])
-      var collection = makeUnique([
-          ['object.instanceOf','collection'],
-          ['collection.descriptor',descriptor],
-        ])
-      e.preventDefault();
-      e.stopPropagation();
-      goToObject(collection);
-    }
-    if(instanciable && instanciable == $$('YoutubeChannel'))
-    {
-      var descriptor = makeUnique([
-          ['object.instanceOf','descriptorFrom'],
-          ['descriptorFrom.to',node],
-          ['descriptorFrom.type','YoutubeVideo.channel'],
-        ])
-      var collection = makeUnique([
-          ['object.instanceOf','collection'],
-          ['collection.descriptor',descriptor],
-        ])
-      e.preventDefault();
-      e.stopPropagation();
-      goToObject(collection);
-    }
-  }
+  // if(selectedMethod != 'simpleView'
+  //   || searchResultsContainer.style.visibility == "visible")
+  // {
+  //   var instanciable = node.$('instanceOf');
+  //   if(instanciable && instanciable == $$('tag'))
+  //   {
+  //     var descriptor = makeUnique([
+  //         ['object.instanceOf','descriptorFrom'],
+  //         ['descriptorFrom.to',node],
+  //         ['descriptorFrom.type','object.tags'],
+  //       ])
+  //     var collection = makeUnique([
+  //         ['object.instanceOf','collection'],
+  //         ['collection.descriptor',descriptor],
+  //       ])
+  //     e.preventDefault();
+  //     e.stopPropagation();
+  //     goToObject(collection);
+  //   }
+  //   if(instanciable && instanciable == $$('YoutubeChannel'))
+  //   {
+  //     var descriptor = makeUnique([
+  //         ['object.instanceOf','descriptorFrom'],
+  //         ['descriptorFrom.to',node],
+  //         ['descriptorFrom.type','YoutubeVideo.channel'],
+  //       ])
+  //     var collection = makeUnique([
+  //         ['object.instanceOf','collection'],
+  //         ['collection.descriptor',descriptor],
+  //       ])
+  //     e.preventDefault();
+  //     e.stopPropagation();
+  //     goToObject(collection);
+  //   }
+  // }
   console.log("clicked",url);
 });
 
@@ -1360,8 +1472,10 @@ var _content = document.getElementById("content");
 var selectedNode = _instanciable;
 var selectedInstanciable = _instanciable;
 var selectedMethod;
+// TRY SUMMARIZING THIS: https://www.youtube.com/watch?v=VzGH97DQzA4
 var showObject = async (node,updateHash=true,skipFetch=false)=>
 {
+  var nodeSource = node;
   // clearHeaderSearch();
 
   // console.log("showObject()", node instanceof Node ? node.name: JSON.stringify(node));
@@ -1381,14 +1495,22 @@ var showObject = async (node,updateHash=true,skipFetch=false)=>
   var instanciable = node && node.$('instanceOf');
 
 
-  // TODO handle asking the server for a unknown node without creating it here (just id?)
-  // console.log("showObject()",node&&node.id,!!instanciable);
-  if(node && !instanciable && !skipFetch)
+  // TODO handle asking the server for a unknown node without creating it here (just id?) // should be done
+  if(!skipFetch && (!node && _.isString(nodeSource) || node && !instanciable))
   {
-    console.log("showObject()","node without instanciable, trying to fetch from server…");
-    await fetchNodesFromServer([node]);
-    return showObject(node,true,true);
+    if(node) await webSocketHandler.fetchNodesFully       ([node]);
+    else     await webSocketHandler.fetchNodesFullyFromIds([nodeSource]);
+    return showObject(node,updateHash,true);
   }
+
+
+  // console.log("showObject()",node&&node.id,!!instanciable);
+  // if(node && !instanciable && !skipFetch)
+  // {
+  //   console.log("showObject()","node without instanciable, trying to fetch from server…");
+  //   await fetchNodesFromServer([node]);
+  //   return showObject(node,true,true);
+  // }
 
   if(!node) 
   {
@@ -1463,6 +1585,17 @@ var showObject = async (node,updateHash=true,skipFetch=false)=>
 
 //   selectedDescriptor = descriptor;
 // }
+
+var createTagging = (tag,tagged,createNotDelete=true)=>
+{
+  var tagging = instanciate('tagging',['tag',tag],['tagged',tagged]);
+  if(!createNotDelete)
+  {
+    tagging.delete();
+    deleteNodesFromServer([tagging]);
+  }
+  showObject(selectedNode);
+}
 var editStringDescriptor = descriptor=>
 {
   // if(!confirm('Are you sure?')) return;
