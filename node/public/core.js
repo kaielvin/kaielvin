@@ -317,6 +317,8 @@ class ClaimStore
         claimJson.d-= lastClaimJsons.d;
         lastClaimJsons.d = lastDate;
       }
+      if(claimJson.F === lastClaimJsons.F) delete claimJson.F;
+      else lastClaimJsons.F = claimJson.F;
 
       claimJsons.push(claimJson);
     }
@@ -353,6 +355,10 @@ class Claim
     this.date = date || new Date();
 
     Object.freeze(this);
+  }
+  get resolvable()
+  {
+    return this.flags !== undefined && this.flags & Claim_ResolvableMask != 0;
   }
   equals(c2)
   {
@@ -447,16 +453,20 @@ class Claim
           :                           this.to;
     var c = this.claimer.id;
     var d = this.date.valueOf();
-    return {f,T,t,c,d};
+    var json = {f,T,t,c,d};
+    if(this.flags) json.F = this.flags;
+    return json;
   }
   get idStr()
   {
     var j = this.toCompactJson();
-    return j.f
+    var str = j.f
       +' '+j.T
       +' '+(_.isString(j.t)?j.t:JSON.stringify(j.t))
       +' '+j.c
       +' '+j.d;
+    if(j.F) str+= ' '+j.F;
+    return str;
   }
   get id()
   {
@@ -465,7 +475,8 @@ class Claim
       +' '+j.T
       +' '+(_.isString(j.t)?j.t:JSON.stringify(j.t))
       +' '+j.c
-      +' '+j.d
+      +' '+j.d;
+    if(j.F) str+= ' '+j.F;
     // console.log(str);
     return hashHex(str);
   }
@@ -497,9 +508,9 @@ if(SortedSet)
 // Claim.deletedIdIndex = {};
 // Claim.idIndex = {};
 Claim.count = 0;
-Claim.make = function(from_,type,to,claimer,date,source)
+Claim.make = function(from_,type,to,claimer,date,flags,source)
 {
-  var claim = new Claim(from_,type,to,claimer,date);
+  var claim = new Claim(from_,type,to,claimer,date,flags);
   // var fromStore = Claim.mainClaimStore.getFromId(id);
   // if(fromStore) return fromStore;
   var result = claim.from.addClaim(claim);
@@ -548,6 +559,7 @@ Claim.fromCompactJson = function(json,source)
             :                      json.t;
   var claimer = Node.makeById(json.c);
   var date = new Date(json.d);
+  var flags = json.F;
 
   if(json.del)
   {
@@ -555,7 +567,7 @@ Claim.fromCompactJson = function(json,source)
     return Claim.remove(claim,source);
   }
 
-  var claim = Claim.make(from_,type,to,claimer,date,source);
+  var claim = Claim.make(from_,type,to,claimer,date,flags,source);
   return claim;
 }
 
@@ -575,10 +587,10 @@ class Node
     // return this.getFromType_string(_strid) || this.id;
     return this.strid || this.id;
   }
-  setFromType(type,to)
+  setFromType(type,to,flags=undefined)
   {
     // return this.addClaim(Claim.make(this,type,to,Node.defaultUser));
-    var claim = Claim.make(this,type,to,Node.defaultUser); // will call this.addClaim() if needed
+    var claim = Claim.make(this,type,to,Node.defaultUser,undefined,flags); // will call this.addClaim() if needed
     // console.log("Node.setFromType()","claim",claim.id,claim.idStr);
   }
   removeClaim(claim)
@@ -748,7 +760,7 @@ class Node
   {
     var claims = this.typeTos[type.id];
     if(!claims) return [];
-    if(claims.length == 0) return undefined;
+    if(claims.length == 0) return [];
 
     if(unique) claims = _.uniqBy(claims,c=>c.to.id);
     if(byDate) claims = _.sortBy(claims,c=>c.date.valueOf());
@@ -765,7 +777,7 @@ class Node
     // if(!(set instanceof Object)) return [];
     // return _.keys(set).map(id=>Node.makeById(id));
   }
-  getFromType_to(type)
+  getFromType_to(type,resolvable=undefined)
   {
     var claims = this.typeTos[type.id];
     if(!claims) return undefined; // TODO try to return _undefined to allow chaining
@@ -774,6 +786,7 @@ class Node
     // if(claims.length > 1 && claims[0].to && claims[0].to.s)
     //   console.log("getFromType_to() claims.length > 1",this.name,'>',type.name,'>',
     //     claims.map(claim=>claim.to && claim.to.s).join(' — '));
+    if(resolvable !== undefined) claims = claims.filter(c=>c.resolvable == resolvable);  
     var to = _.maxBy(claims,c=>c.date.valueOf()).to;
     return to.u ? undefined : to;
     // return _.last(claim).to;
@@ -805,11 +818,23 @@ class Node
   {
     return this.typeFromsCounts[type.id]||0;
   }
-  getToType_froms(type) // approximate as currently not handling resets
+  getToType_froms(type,resolvable=undefined) // approximate as currently not handling resets
   {
     // return this.typeFroms[type.id] || [];
     var set = this.typeFroms[type.id];
     if(!(set instanceof Object)) return [];
+    if(resolvable !== undefined)
+    {
+      var froms = [];
+      found: for(var fromId in set)
+      for(var claim of set[fromId])
+      if(claim.resolvable === resolvable)
+      {
+        froms.push(claim.from);
+        break;
+      }
+      return froms;
+    }
     return _.keys(set).map(id=>Node.makeById(id));
   }
   hasFrom(type,_from) // approximate as currently not handling resets, if claims are ordered, just look at the last one
@@ -844,7 +869,7 @@ class Node
     if(this._cache_instanciable) return this._cache_instanciable;
     return this._cache_instanciable = $$(this,_instanceOf);
   }
-  // cached accessor for speed
+  // cached accessor for speed, for classes only
   get supClasses()
   {
     if(this._cache_supClasses) return this._cache_supClasses;
@@ -857,6 +882,36 @@ class Node
     if(!instanciable) return [_object];
     return instanciable.supClasses;
   }
+  
+  get resolvableField() // only for claimType
+  {
+    if(this._cache_resolvableField) return this._cache_resolvableField;
+    return this._cache_resolvableField = this.$ex('claimType.resolvableField');
+  }
+  
+  // valueFields => from fields not functional, not disabled
+  get instanciableValueFields() // only for instanciable
+  {
+    if(this._cache_instanciableValueFields) return this._cache_instanciableValueFields;
+    var fields = [];
+    for(var class_ of this.supClasses)
+    for(var field of class_.$from(_typeFrom))
+    if(field.$(_functional) != _true)
+    if(field.$(_claimDisabled) != _true)
+    {
+      fields.push(field);
+      var resolvableField = field.resolvableField;
+      if(resolvableField) fields.push(resolvableField);
+    }
+    return this._cache_instanciableValueFields = fields;
+  }
+  get valueFields() // for any object
+  {
+    var instanciable = this.instanciable;
+    if(!instanciable) instanciable = _object;
+    return instanciable.instanciableValueFields;
+  }
+
   hasClass(class_)
   {
     return this.classes.includes(class_);
@@ -870,6 +925,78 @@ class Node
   {
     delete this._cache_instanciable;
     delete this._cache_supClasses;
+  }
+
+  resolve(method,...args)
+  {
+    method = strToType(method,this);
+    var _function = method.getFromType_to(_fieldFunction);
+    if(_function)
+    {
+      var expression = _function.$(_functionExpr);
+      if(expression)
+      {
+        var context = args[0] || {};
+        var variable = _function.$(_functionVar);
+        if(variable) context[variable.id] = [this];
+        console.log("Node.resolve()",
+          'expression',expression.$('prettyString'),
+          'variable',variable.$('prettyString'),
+          'value(=this)',this.$('prettyString'));
+        return expression.resolve('resolve',context);
+      }
+    }
+    var jsMethod = method.getFromType_to(_resolve);
+    if(jsMethod)
+    {
+      // console.log("$ex",String(jsMethod.j))
+      if(!(jsMethod instanceof Object)) return undefined;
+      if(!jsMethod.j) return undefined;
+      try
+      {
+        return jsMethod.j.call(this,...args);
+      }
+      catch(e)
+      {
+        console.error("$ex",method.name,e);
+        return [];
+      }
+    }
+
+    var tos = this.getFromType_nodes(method);
+    var resolvableField = method.resolvableField;
+    var resolvable = resolvableField && this.getFromType_node(resolvableField);
+    if(resolvable)
+      tos.push(...resolvable.$ex('resolve',args[0] || {}));
+
+    // var claims = this.typeTos[method.id];
+    // if(!claims) return [];
+    // if(claims.length == 0) return [];
+    // // if(unique) claims = _.uniqBy(claims,c=>c.to.id);
+    // // if(byDate) claims = _.sortBy(claims,c=>c.date.valueOf());
+    // var tos = [];
+    // var context;
+    // for(var claim of claims)
+    // {
+    //   if(!claim.resolvable)
+    //   {
+    //     tos.push(claim.to);
+    //     continue;
+    //   }
+    //   if(!context) context = args[0] || {};
+    //     tos.push(...claim.to.resolve('resolve',context));
+    // }
+    // if(claims instanceof Claim) return [claims.to]; // unexpected
+    // var tosMap = {}
+    // for(var claim of claims)
+    //   tosMap[claim.to.id] = claim;
+    // var tos = [];
+    // for(var toId in tosMap)
+    //   tos.push(tosMap[toId]);
+    // return tos;
+    return tos;
+
+
   }
 
 
@@ -904,17 +1031,17 @@ class Node
     if(_function)
     {
       var expression = _function.$(_functionExpr);
-      console.log("Node.$ex()",
-        'expression',expression&&expression.$('prettyString'));
+      // console.log("Node.$ex()",
+      //   'expression',expression&&expression.$('prettyString'));
       if(expression)
       {
         var context = {};
         var variable = _function.$(_functionVar);
         if(variable) context[variable.id] = [this];
-        console.log("Node.$ex()",
-          'expression',expression.$('prettyString'),
-          'variable',variable.$('prettyString'),
-          'value(=this)',this.$('prettyString'));
+        // console.log("Node.$ex()",
+        //   'expression',expression.$('prettyString'),
+        //   'variable',variable.$('prettyString'),
+        //   'value(=this)',this.$('prettyString'));
         // var results = expression.$ex('resolve',context);
         // console.log("Node.$ex()",
         //   'results',results);
@@ -1124,33 +1251,56 @@ Node.defaultUser = _kaielvin;
 
 function strToType(str,node=undefined,classes=undefined)
 {
-  if(!str) throw new Error("undefined string input");
-  if(str instanceof Node) return str;
-  if(!_.isString(str)) throw new Error('not a string');
-  if(str[0] == '.') str = str.substring(1); // deprecated, might still be used
-  if(str.includes('.'))
+  var type;
+  var isResolvableField = false;
+  foundType:
   {
-    var type = stridToNode(str);
-    if(!type) throw new Error('not found ("'+str+'")');
-    return type;
+    if(!str) throw new Error("undefined string input");
+    if(str instanceof Node)
+    {
+      type = str;
+      break foundType;
+    }
+    if(!_.isString(str)) throw new Error('not a string');
+    if(str[0] == '.') str = str.substring(1); // deprecated, might still be used
+    isResolvableField = _.endsWith(str,':resolvable');
+    if(isResolvableField) str = str.substring(0,str.length-11);
+    if(str.includes('.'))
+    {
+      type = stridToNode(str);
+      break foundType;
+    }
+    if(node||classes)
+    {
+      classes = classes || node.classes;
+      if(classes instanceof Node)
+      {
+        console.error(new Error("strToType() deprecated use of strToType with instanciable (provide classes or nothing), provided: "+classes.name));
+        classes = classes.$('class.supClasses');
+      }
+      if(!_.isArray(classes)) console.error("strToType()","!_.isArray(classes)",classes);
+      for(var class_ of classes)
+      {
+        var typei = stridToNode(class_.name+'.'+str);
+        if(typei && typei.$(_claimDisabled) != _true)
+        {
+          type = typei;
+          break foundType;
+        }
+      }
+    }
+    var type = node ? undefined : stridToNode('object.'+str); // last attempt
+    if(!type) throw new Error('not found ("'+str+'")'+(node?' node='+node.name:'')+(classes?' classes='+classes.map(c=>c.name).join():''));
+    break foundType;
   }
-  if(node||classes)
+
+  if(!type) throw new Error('not found ("'+str+'")');
+  if(isResolvableField)
   {
-    classes = classes || node.classes;
-    if(classes instanceof Node)
-    {
-      console.error(new Error("strToType() deprecated use of strToType with instanciable (provide classes or nothing), provided: "+classes.name));
-      classes = classes.$('class.supClasses');
-    }
-    if(!_.isArray(classes)) console.error("strToType()","!_.isArray(classes)",classes);
-    for(var class_ of classes)
-    {
-      var type = stridToNode(class_.name+'.'+str);
-      if(type && type.$(_claimDisabled) != _true) return type;
-    }
+    var resolvableField = type.resolvableField;
+    if(!resolvableField) throw new Error('field does not have a resolvableField ("'+type.name+'")');
+    return type.resolvableField;
   }
-  var type = node ? undefined : stridToNode('object.'+str); // last attempt
-  if(!type) throw new Error('not found ("'+str+'")'+(node?' node='+node.name:'')+(classes?' classes='+classes.map(c=>c.name).join():''));
   return type;
 
   // var typeObject = undefined;
@@ -1370,8 +1520,8 @@ function makeUnique(typeTos)
 
   if(nodeTypeTos.length == 0) throw new Error("makeUnique() needs at least one value as node (other types are not indexed)");
 
-  nodeTypeTos = nodeTypeTos.map(([type,to])=>({type:resolveIntoNode(type),to:resolveIntoNode(to)}));
-  valueTypeTos = valueTypeTos.map(([type,to])=>({type:resolveIntoNode(type),to:to}));
+  nodeTypeTos = nodeTypeTos.map(([type,to,resolvable])=>({type:resolveIntoNode(type),to:resolveIntoNode(to),resolvable:resolvable===true}));
+  valueTypeTos = valueTypeTos.map(([type,to,resolvable])=>({type:resolveIntoNode(type),to:to,resolvable:resolvable===true}));
   var toCountPerType = {};
   nodeTypeTos.forEach(o=>
   {
@@ -1386,7 +1536,9 @@ function makeUnique(typeTos)
   var nodeTypeTosByCount = _.sortBy(nodeTypeTos,({count})=>count);
   var smallestType = nodeTypeTosByCount[0].type;
   var smallestTo = nodeTypeTosByCount[0].to;
-  var uniques = smallestTo.getToType_froms(smallestType);
+  var smallestResolvable = nodeTypeTosByCount[0].resolvable;
+  var uniques = smallestTo.getToType_froms(smallestType,smallestResolvable);
+  // var uniques = smallestTo.getToType_froms(smallestType);
   nodeTypeTosByCount.shift(); // get rid of the smallest type, used as base selection
   // console.log(uniques.length);
 
@@ -1401,10 +1553,11 @@ function makeUnique(typeTos)
         return false; // not the same number of two values (too little or too much)
       toCountCheckedTypes[type.id] = true;
     }
-    for(var {type,to} of nodeTypeTosByCount)
-      if(!to.hasFrom(type,_from)) return false;
+    for(var {type,to,resolvable} of nodeTypeTosByCount)
+      if(!to.hasFrom(type,_from,)) return false;
     for(var {type,to} of valueTypeTos)
-      if(!_.isEqual(_from.getFromType_to(type),to)) return false;
+      if(!_.isEqual(_from.getFromType_to(type,resolvable),to)) return false;
+      // if(!_.isEqual(_from.getFromType_to(type),to)) return false;
     return true;
   });
 
@@ -1440,7 +1593,15 @@ function makeUnique(typeTos)
 
   // else create one
   var unique = Node.make();
-  typeTos.forEach(([type,to])=>$$(unique,type,to));
+  // typeTos.forEach(([type,to])=>$$(unique,type,to));
+  // typeTos.forEach(([type,to,flags])=>unique.setFromType(type,to,flags));
+  typeTos.forEach(([type,to,resolvable])=>
+  {
+    if(_.isFunction(to)) to = {j:to};
+    if(_.isString(to)) to = resolveIntoNode(to);
+    if(_.isString(type)) type = resolveIntoNode(type);
+    unique.setFromType(type,to,resolvable?Claim_ResolvableMask:undefined);
+  });
   makeUnique.justCreated = true;
   return unique;
 }
@@ -1468,6 +1629,8 @@ function importClaims(compactJson,source)
     else lastClaimJsons.t = claimJson.t;
     if(claimJson.c === undefined) claimJson.c = lastClaimJsons.c;
     else lastClaimJsons.c = claimJson.c;
+    if(claimJson.F === undefined) claimJson.F = lastClaimJsons.F;
+    else lastClaimJsons.F = claimJson.F;
 
     claimJson.f = values[claimJson.f];
     claimJson.T = values[claimJson.T];
@@ -1516,6 +1679,27 @@ Node.coreNodesIterator = function * ()
     }
   }
 }
+Node.treeIterator = function * (iteratorIn)
+{
+  var yieldMap = {};
+  var stack = [...iteratorIn];
+  while(stack.length > 0)
+  {
+    var node = stack.pop();
+    yieldMap[node.id] = true;
+    yield node;
+    for(var field of node.valueFields)
+    {
+      var tos = field.$(_multipleValues) == _true
+        ? this.getFromType_nodes(field)
+        : [this.getFromType_node(field)];
+      for(var to of tos)
+      if(to instanceof Node && !yieldMap[to.id])
+        stack.push(to);
+    }
+  }
+}
+
 
 
 // function garbageCollect(extraGarbageCollectables=[])
@@ -1608,15 +1792,16 @@ function garbageCollect(keepCoreOnly=false)
   // })
 
   if(keepCoreOnly)
+    // for(var node of Node.treeIterator(Node.coreNodesIterator())) saveNode(node);
     for(var node of Node.coreNodesIterator()) saveNode(node);
   else
   {
     var instanciables = $$('instanciable').$froms('object.instanceOf');
     instanciables.forEach(instanciable=>
     {
-      var supClasses = instanciable.$ex(_supClasses);
+      var supClasses = instanciable.supClasses;
       if(supClasses.some(c=> c.$('garbageCollectable') == _true )) return; // not trying to save instances of this instanciable
-      instanciable.$froms('object.instanceOf').forEach(node=>saveNode(node,instanciable,supClasses));
+      instanciable.$froms(_instanceOf).forEach(node=>saveNode(node,instanciable,supClasses));
     });
   }
 

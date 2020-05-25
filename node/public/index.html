@@ -428,7 +428,7 @@ Claim.onNewClaim = (claim,remove=false,source)=>
 {
   // if(!_skipPersistLocal && !remove) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"persistClaim()");
   // if(!_skipPersistLoca) persistClaim(claim,remove);
-  // console.log("Claim.onNewClaim()","source",source);
+  console.log("Claim.onNewClaim()","source",source);
   if(source != "localDisk") persistClaim(claim,remove,source);
   if(remove) return;
   // if(!_skipPersistServer) console.log("Claim.onNewClaim()","claim",claim.id,claim.idStr,"sendClaimToServer()");
@@ -1014,12 +1014,12 @@ document.addEventListener('keydown', async e => {
       // window.location.hash = selectedNode.name+'/simpleView';
     return e.preventDefault();
   }
-  if(!c&&!s&& e.key == 'i')
-  {
-    var instanciable = selectedNode.$('instanceOf');
-    if(instanciable) goToObject(instanciable);
-    return e.preventDefault();
-  }
+  // if(!c&&!s&& e.key == 'i')
+  // {
+  //   var instanciable = selectedNode.$('instanceOf');
+  //   if(instanciable) goToObject(instanciable);
+  //   return e.preventDefault();
+  // }
   if(!c&&!s&& e.key == 'b')
   {
     addToClipboard();
@@ -1060,21 +1060,19 @@ document.addEventListener('keydown', async e => {
   }
 // TRY SUMMARIZING THIS: https://www.youtube.com/watch?v=VzGH97DQzA4
 
-  var makeFieldBySomewardsTagResolver = (tag,node)=>
+  var firstFieldBySomewardsTag = (tag,node)=>
   {
-    var classes = node.classes;
-    var inwardsField;
-    found:
-    for(var class_ of classes)
+    for(var class_ of node.classes)
     for(var field of class_.$froms(_typeFrom))
     if(field.$ex('getTags').includes(tag))
-    {
-      inwardsField = field;
-      break found;
-    }
-    console.log('accessFieldBySomewardsTag()',tag.name,inwardsField&&inwardsField.name)
-    if(!inwardsField) return false;
-    return instanciate('accessorTo',['in',node],['type',inwardsField]);
+      return field;
+  }
+  var makeFieldBySomewardsTagResolver = (tag,node)=>
+  {
+    var somewardsField = firstFieldBySomewardsTag(tag,node);
+    console.log('accessFieldBySomewardsTag()',tag.name,somewardsField&&somewardsField.name)
+    if(!somewardsField) return false;
+    return instanciate('accessorTo',['in',node],['type',somewardsField]);
   }
   var accessFieldBySomewardsTag = tag=>
   {
@@ -1103,6 +1101,11 @@ document.addEventListener('keydown', async e => {
     accessFieldBySomewardsTag($$('upwardsFields'));
     return e.preventDefault();
   }
+  if(!c&&!s&& e.key == 'i')
+  {
+    accessFieldBySomewardsTag($$('selfwardsFields'));
+    return e.preventDefault();
+  }
   if(!c&&!s&& e.key == 'y')
   {
     accessFieldBySomewardsTag($$('downwardsFields'));
@@ -1112,38 +1115,124 @@ document.addEventListener('keydown', async e => {
   if( c&&!s&& e.key == 'b')
   {
     var _inwardsFields = $$('inwardsFields');
-    var nodeToReplaceByVariable;
-    var nodeIt = selectedNode;
-    while(true)
+    
+    var variable;
+    var getVariable = ()=> { if(variable) return variable; else return variable = Node.make().$(_instanceOf,_variable) };
+
+    var clone = node=>
     {
-      if(!nodeIt.hasAnyClass(_resolvable,_collection)) break;
+      // if(!nodeIt.hasAnyClass(_resolvable,_collection)) return node;
+      var inwardsField = firstFieldBySomewardsTag(_inwardsFields,node);
+      console.log("Ctrl+'b' [build function]",'inwardsField',inwardsField&&inwardsField.$('prettyString'));
+      if(!inwardsField) return node;
+      var resolvableField = inwardsField;
+      // var values = {};
 
-      var inwardsResolvable = makeFieldBySomewardsTagResolver(_inwardsFields,nodeIt);
-      var results = inwardsResolvable.$ex('resolve');
-      if(results.length == 0) break;
+      var inwardsResolvableField = inwardsField.resolvableField;
+      console.log("Ctrl+'b' [build function]",'inwardsResolvableField',inwardsResolvableField&&inwardsResolvableField.$('prettyString'));
+      // if(!inwardsResolvableField) return node;
+      if(inwardsResolvableField)
+        resolvableField = inwardsResolvableField;
 
-      nodeIt = results[0];
+      var resolvableIn = node.$(resolvableField);
+      if(resolvableIn)
+      {
+        resolvableIn = clone(resolvableIn);
+        // values[inwardsResolvableField.id] = resolvableIn;
+      }
+      else
+      {
+        // values[inwardsResolvableField.id] = variable;
+        resolvableIn = getVariable();
+      }
+      console.log("Ctrl+'b' [build function]",'resolvableField',resolvableField.$('prettyString'),'resolvableIn',resolvableIn.$('prettyString'));
+
+      var fields = [];
+      for(var class_ of node.classes)
+      {
+        var newfields = class_.$froms(_typeFrom)
+          .filter(claimType=> claimType.$(_functional) != _true && claimType.$(_claimDisabled) != _true && claimType != inwardsField );
+        for(var field of newfields)
+          console.log("Ctrl+'b' [build function]",'class_',class_.name,'field',field.name);
+        fields.push(...newfields);
+    }
+      var resolvableFields = [];
+      fields.forEach(field=>
+      {
+        var resolvableField_ = field.resolvableField;
+        if(resolvableField_) resolvableFields.push(resolvableField_);
+      })
+      fields = _.concat(fields,resolvableFields);
+
+      var uniqueTypeTos = [
+        [_instanceOf,node.instanciable],
+        [resolvableField,resolvableIn],
+      ];
+      for(var field of fields)
+      {
+        var tos = field.$(_multipleValues)
+        ? node.getFromType_nodes(field)
+        : [node.getFromType_to(field)];
+        for(var to of tos)
+        if(to)
+          uniqueTypeTos.push([field,to]); 
+    //     if(claimType.$(_multipleValues)) throw new Error('multipleValues not yet supported');
+      }
+      console.log("Ctrl+'b' [build function]",'uniqueTypeTos',uniqueTypeTos);
+      return makeUnique(uniqueTypeTos);
     }
 
-    if(nodeIt == selectedNode)
+    var clonedWithVariable = selectedNode;
+    if(clonedWithVariable.hasClass(_collection))
+      clonedWithVariable = clonedWithVariable.$('descriptor');
+    clonedWithVariable = clone(clonedWithVariable);
+    if(clonedWithVariable == selectedNode)
     {
-      console.error('build function:',"selected node is not a resolvable/collection")
+      console.error(new Error('could not a place to put a variable.'));
+      return;
     }
-    else
-    {
-      console.log("build function:",'would substitute',nodeIt.$('prettyString'));
-      // var variable = Node.make().$(_instanceOf,_variable);
-      // clone the selected expression replacing nodeIt into variable
-      // var newExpr = selectedNode.$ex('cloneTreeReplacingBy',
-      //   n=>n==nodeIt?variable:n,
-      //   (field,to,from)=>
-      //          from.hasAnyClass(_resolvable,_collection)
-      //       && field.$ex('getTags').includes(_inwardsFields)
-      //       && field.$('_typeTo') == _resolvable
-      // );
-      // var function_ = instanciate('function',['in',newExpr],['variable',variable]);
-      // goToObject( function_ );
-    }
+    var function_ = instanciate('function',['in',clonedWithVariable],['variable',getVariable()]);
+    goToObject( function_ );
+
+    // var _inwardsFields = $$('inwardsFields');
+    // var nodeToReplaceByVariable;
+    // var nodeIt = selectedNode;
+    // while(true)
+    // {
+    //   if(!nodeIt.hasAnyClass(_resolvable,_collection)) break;
+
+    //   var inwardsResolvable = makeFieldBySomewardsTagResolver(_inwardsFields,nodeIt);
+    //   var results = inwardsResolvable.$ex('resolve');
+    //   if(results.length == 0) break;
+
+    //   nodeIt = results[0];
+    // }
+
+    // if(nodeIt == selectedNode)
+    // {
+    //   console.error('build function:',"selected node is not a resolvable/collection")
+    // }
+    // else
+    // {
+    //   console.log("build function:",'would substitute',nodeIt.$('prettyString'));
+    //   var variable = Node.make().$(_instanceOf,_variable);
+    //   clone the selected expression replacing nodeIt into variable
+    //   // var newExpr = selectedNode.$ex('cloneTreeReplacingBy',
+    //   //   n=>n==nodeIt?variable:n,
+    //   //   (field,to,from)=>
+    //   //          from.hasAnyClass(_resolvable,_collection)
+    //   //       && field.$ex('getTags').includes(_inwardsFields)
+    //   //       && field.$('_typeTo') == _resolvable
+    //   // );
+    //   var newExpr = selectedNode.$ex('reconstructAlterned',
+    //     (from,field)=>
+    //            from.hasAnyClass(_resolvable,_collection)
+    //         && field.$ex('getTags').includes(_inwardsFields)
+    //         && field.$('_typeTo') == _resolvable
+    //   );
+    //   var function_ = instanciate('function',['in',newExpr],['variable',variable]);
+    //   goToObject( function_ );
+    // }
 
 
     return e.preventDefault();
